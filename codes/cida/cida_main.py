@@ -513,12 +513,12 @@ def load_moons(domains):
 
 def main():
 
-	X_data, Y_data, U_data = load_twitter(['Delhi_%d.csv' % i for i in range(5)])
+	#X_data, Y_data, U_data = load_twitter(['Delhi_%d.csv' % i for i in range(5)])
 	#X_data, Y_data, U_data = load_news()
 	#X_data, Y_data, U_data = load_twitter(['Fight_%d.csv' % i for i in range(5)])
 
-	#ot_classifier(X_data, Y_data, [0,1,2,3,4,5,6,7,8], [9,10])
-	cida_main_regression(X_data, Y_data, U_data, 5, [3], [4])
+	classification(X_data, Y_data, U_data, 11, [0,1,2,3,4,5,6,7,8], [9,10])
+	#cida_main_regression(X_data, Y_data, U_data, 5, [3], [4])
 	#cida_main_classification(X_data, Y_data, U_data, 11, list(range(7,9)), [9,10])
 	#cida_main_classification(X_data, Y_data, U_data, 5, list(range(0,3)), [3, 4])
 	#_dummy_train(X_data, Y_data, U_data, 11, list(range(0,9)), [9,10])
