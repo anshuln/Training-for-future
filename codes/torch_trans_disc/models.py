@@ -32,6 +32,7 @@ class ClassifyNet(nn.Module):
 			X = self.relu(X)
 
 		X = self.out_layer(X)
+		X = self.relu(X)
 		X = torch.softmax(X,dim=1)
 
 		return X
@@ -69,7 +70,7 @@ class Discriminator(nn.Module):
 
 
 def classification_loss(Y_pred, Y):
-	return -1.* torch.sum((Y * torch.log(Y_pred)))
+	return  -1.*torch.sum((Y * torch.log(Y_pred)))
 
 def bxe(real, fake):
 	return -1.*((real*torch.log(fake)) + ((1-real)*torch.log(1-fake)))
@@ -98,7 +99,6 @@ def discounted_transformer_loss(real_data, trans_data, trans_output):
 	re_loss = reconstruction_loss(real_data[:,0:-2], trans_data)
 	tr_loss = transformer_loss(trans_output)
 
-	loss = torch.sum(time_diff * tr_loss + (1-time_diff) * re_loss)
+	loss = torch.mean(time_diff * tr_loss + (1-time_diff) * re_loss)
 	return loss
 
-	
