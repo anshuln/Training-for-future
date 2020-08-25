@@ -7,12 +7,16 @@ import matplotlib.pyplot as plt
 #from transport import *
 from sklearn.datasets import make_classification, make_moons
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
-from models import *
-from data_loaders import *
 from torch.utils.tensorboard import SummaryWriter
 import time 
 
-def train_transformer_batch(X,Y,transformer,discriminator,classifier,transformer_optimizer,is_wasserstein=False):
+
+from models import *
+from data_loaders import *
+from regularized_ot import *
+
+
+def train_transformer_batch(X,Y,X_transport,transformer,discriminator,classifier,transformer_optimizer,is_wasserstein=False):
 
     transformer_optimizer.zero_grad()
     X_pred = transformer(X)
@@ -24,7 +28,7 @@ def train_transformer_batch(X,Y,transformer,discriminator,classifier,transformer
     X_pred_class = torch.cat([X_pred,domain_info],dim=1)
     pred_class = classifier(X_pred_class)
 
-    trans_loss,ld,lr, lc = discounted_transformer_loss(X, X_pred, is_real, pred_class[:,0].view(-1,1),Y[:,0].view(-1,1),is_wasserstein)
+    trans_loss,ld,lr, lc = discounted_transformer_loss(X, X_pred, X_transport,is_real, pred_class[:,0].view(-1,1),Y[:,0].view(-1,1),is_wasserstein)
 
     # gradients_of_transformer = trans_tape.gradient(trans_loss, transformer.trainable_variables)
     trans_loss.backward()
@@ -50,7 +54,7 @@ def train_discriminator_batch_wasserstein(X_old, X_now, transformer, discriminat
 
     discriminator_optimizer.step()
     for p in discriminator.parameters():
-        p.data.clamp_(-0.5, 0.5)
+        p.data.clamp_(-0.2, 0.2)
     return disc_loss
 
 def train_discriminator_batch(X_old, X_now, transformer, discriminator, discriminator_optimizer):
@@ -108,13 +112,13 @@ def train_classifier_d(X, Y, classifier, classifier_optimizer,verbose=False):
     return pred_loss
 
 
-EPOCH = 500
-CLASSIFIER_EPOCHS = 250
+EPOCH = 700
+CLASSIFIER_EPOCHS = 150
 SUBEPOCH = 10
 BATCH_SIZE = 64
 DISC_BATCH_SIZE=64
 SHUFFLE_BUFFER_SIZE=4096
-IS_WASSERSTEIN = True
+IS_WASSERSTEIN = False
 
 def train(X_data, Y_data, U_data, num_indices, source_indices, target_indices):
 
@@ -129,23 +133,37 @@ def train(X_data, Y_data, U_data, num_indices, source_indices, target_indices):
     U_target = U_data[target_indices]
 
 
-    transformer = Transformer(4, 4)
+    transformer = Transformer(4, 6)
     discriminator = Discriminator(3, 3,IS_WASSERSTEIN)
     classifier = ClassifyNet(3,3,2)
 
-    transformer_optimizer   = torch.optim.Adagrad(transformer.parameters(),1e-2)
+    transformer_optimizer   = torch.optim.Adagrad(transformer.parameters(),5e-3)
     classifier_optimizer    = torch.optim.Adagrad(classifier.parameters(),5e-2)
-    discriminator_optimizer = torch.optim.Adagrad(discriminator.parameters(),5e-3)
+    discriminator_optimizer = torch.optim.Adagrad(discriminator.parameters(),1e-3)
 
     X_past = X_source[0]
     U_past = U_source[0]
     Y_past = Y_source[0]
     writer = SummaryWriter(comment='{}'.format(time.time()))
 
+    ot_maps = [[None for x in range(len(source_indices))] for y in range(len(source_indices))]
+
+    for i in range(len(source_indices)):
+        for j in range(len(source_indices)):
+            if i!=j:
+                ot_sinkhorn = RegularizedSinkhornTransport(reg_e=0.5, alpha=10, max_iter=50, norm="median", verbose=False)
+                ot_sinkhorn.fit(Xs=X_data[source_indices[i]]+1e-6, ys=Y_data[source_indices[i]]+1e-6, Xt=X_data[source_indices[j]]+1e-6, yt=Y_data[source_indices[j]]+1e-6, iteration=0)
+                ot_maps[i][j] = ot_sinkhorn.transform(X_data[source_indices[i]]+1e-6)
+            else:
+                ot_maps[i][j] = X_data[source_indices[i]]
+    # print(ot_maps)
+    # assert False
     for class_index in range(1,len(X_source)):
         X_past = np.vstack([X_past, X_source[class_index]])
         Y_past = np.vstack([Y_past, Y_source[class_index]])
         U_past = np.hstack([U_past, U_source[class_index]])     
+    
+    # print(ot_maps)
     print("-------------TRAINING CLASSIFIER----------")
     class_step = 0
     for epoch in range(CLASSIFIER_EPOCHS):
@@ -169,71 +187,86 @@ def train(X_data, Y_data, U_data, num_indices, source_indices, target_indices):
         print('Domain %d' %index)
         print('----------------------------------------------------------------------------------------------')
 
-        past_dataset = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(X_past).float(),
-                                                     torch.tensor(U_past).float(), torch.tensor(Y_past).float()),BATCH_SIZE,True)
+        past_data = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(X_past).float(),
+                                                    torch.tensor(U_past).float(), torch.tensor(Y_past).float()),BATCH_SIZE,True)
         # present_dataset = torch.utils.data.Dataloader(torch.utils.data.TensorDataset(X_source[index], U_source[index], 
         #                   Y_source[index]),BATCH_SIZE,True,repeat(
         #                   math.ceil(X_past.shape[0]/X_source[index].shape[0])))
 
+        num_past_batches = len(X_past) // BATCH_SIZE
         X_past = np.vstack([X_past, X_source[index]])
         Y_past = np.vstack([Y_past, Y_source[index]])
         U_past = np.hstack([U_past, U_source[index]])
         
-        all_dataset = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(X_past).float(), torch.tensor(U_past).float(), torch.tensor(Y_past).float()),BATCH_SIZE,True)
-        step_t = 0
-        step_d = 0
+        p = TransformerDataset(X=X_past,
+                    Y=Y_past,U=U_past,transported_samples=ot_maps,source_indices=source_indices,
+                    target_indices=target_indices,this_U=U_source[index][0],index_fun=lambda x: (x %200))
+        print(len(p))
+        all_data = torch.utils.data.DataLoader(p,
+                    BATCH_SIZE,True)            # for batch_X, batch_U, batch_Y, batch_transported in all_dataset:
+        num_all_batches  = len(p) // BATCH_SIZE
+        all_steps_t = 0
+        all_steps_d = 0
         step_c = 0
+
         for epoch in range(EPOCH):
 
             loss1, loss2 = 0,0
-            for batch_X, batch_U, batch_Y in all_dataset:
+            step_t,step_d = 0,0
 
-                # batch_X = tf.cast(batch_X, dtype=tf.float32)
-                # batch_Y = tf.cast(batch_Y, dtype=tf.float32)
-                # batch_U = tf.cast(batch_U, dtype=tf.float32)
+            all_dataset = iter(all_data)
+            past_dataset = iter(past_data)
+            loop1 = True
+            loop2 = True
+            while (loop1 or loop2):
+                if step_d < num_past_batches:
+                    batch_X, batch_U, batch_Y = next(past_dataset)
+                    batch_U = batch_U.view(-1,1)
+                    this_U = torch.tensor([U_source[index][0]]*batch_U.shape[0])
+                    this_U = this_U.view(-1,1).float()
+                    batch_X = torch.cat([batch_X, batch_U, this_U], dim=1)
+                    # Do this in a better way
 
-                batch_U = batch_U.view(-1,1)
-                this_U = torch.tensor([U_source[index][0]]*batch_U.shape[0]).float()
-                this_U = this_U.view(-1,1)
-                batch_X = torch.cat([batch_X, batch_U, this_U], dim=1)
-                loss_t,ltd,lr,lc = train_transformer_batch(batch_X,batch_Y,transformer,discriminator,classifier,transformer_optimizer,is_wasserstein=IS_WASSERSTEIN) #train_transformer_batch(batch_X)
-                loss1 += loss_t
-                writer.add_scalar('Loss/transformer',loss_t.detach().numpy(),step_t)
-                writer.add_scalar('Loss/transformer_disc',ltd.detach().numpy(),step_t)
-                writer.add_scalar('Loss/transformer_rec',lr.detach().numpy(),step_t)
-                writer.add_scalar('Loss/transformer_classifier',lc.detach().numpy(),step_t)
-                step_t += 1
-            for batch_X, batch_U, batch_Y in past_dataset:
+                    indices = np.random.random_integers(0, X_source[index].shape[0]-1, batch_X.shape[0])
 
-                # batch_X = tf.cast(batch_X, dtype=tf.float32)
-                # batch_Y = tf.cast(batch_Y, dtype=tf.float32)
-                # batch_U = tf.cast(batch_U, dtype=tf.float32)
+                    # Better to shift this to the dataloader
+                    real_X = np.hstack([X_source[index][indices], U_source[index][indices].reshape(-1,1), 
+                                U_source[index][indices].reshape(-1,1)])
 
-                # batch_U = tf.reshape(batch_U, [-1,1])
-                # this_U = tf.constant([U_source[index][0]]*batch_U.shape[0], dtype=tf.float32)
-                # this_U = tf.reshape(this_U, [-1,1])
-                # batch_X = tf.cat([batch_X, batch_U, this_U], axis=1)
-
-                batch_U = batch_U.view(-1,1)
-                this_U = torch.tensor([U_source[index][0]]*batch_U.shape[0])
-                this_U = this_U.view(-1,1).float()
-                batch_X = torch.cat([batch_X, batch_U, this_U], dim=1)
-                # Do this in a better way
-
-                indices = np.random.random_integers(0, X_source[index].shape[0]-1, batch_X.shape[0])
-
-                # Better to shift this to the dataloader
-                real_X = np.hstack([X_source[index][indices], U_source[index][indices].reshape(-1,1), 
-                            U_source[index][indices].reshape(-1,1)])
-
-                real_X = torch.tensor(real_X).float()
-                if IS_WASSERSTEIN:
-                    loss_d = train_discriminator_batch_wasserstein(batch_X, real_X, transformer, discriminator, discriminator_optimizer) #train_discriminator_batch(batch_X, real_X)
+                    real_X = torch.tensor(real_X).float()
+                    if IS_WASSERSTEIN:
+                        loss_d = train_discriminator_batch_wasserstein(batch_X, real_X, transformer, discriminator, discriminator_optimizer) #train_discriminator_batch(batch_X, real_X)
+                    else:
+                        loss_d = train_discriminator_batch(batch_X, real_X, transformer, discriminator, discriminator_optimizer)
+                    loss2 += loss_d
+                    writer.add_scalar('Loss/disc',loss_d.detach().numpy(),step_d+all_steps_d)
+                    step_d += 1
+                    loop2 = True
                 else:
-                    loss_d = train_discriminator_batch(batch_X, real_X, transformer, discriminator, discriminator_optimizer)
-                loss2 += loss_d
-                writer.add_scalar('Loss/disc',loss_d.detach().numpy(),step_d)
-                step_d += 1
+                    loop2 = False
+                if step_t < num_all_batches:
+                    batch_X, batch_U, batch_Y, batch_transported = next(all_dataset)
+                    batch_U = batch_U.view(-1,1)
+                    this_U = torch.tensor([U_source[index][0]]*batch_U.shape[0]).float()
+                    this_U = this_U.view(-1,1)
+                    # print(batch_X.size(),batch_U.size(),this_U.size(),batch_transported.size())
+                    batch_X = torch.cat([batch_X, batch_U, this_U], dim=1)
+                    loss_t,ltd,lr,lc = train_transformer_batch(batch_X,batch_Y,batch_transported,
+                                    transformer,discriminator,classifier,
+                                    transformer_optimizer,is_wasserstein=IS_WASSERSTEIN) #train_transformer_batch(batch_X)
+                    loss1 += loss_t
+                    writer.add_scalar('Loss/transformer',loss_t.detach().numpy(),step_t+all_steps_t)
+                    writer.add_scalar('Loss/transformer_disc',ltd.detach().numpy(),step_t+all_steps_t)
+                    writer.add_scalar('Loss/transformer_rec',lr.detach().numpy(),step_t+all_steps_t)
+                    writer.add_scalar('Loss/transformer_classifier',lc.detach().numpy(),step_t+all_steps_t)
+                    step_t += 1
+                    loop1 = True
+                # for batch_X, batch_U, batch_Y in past_dataset:
+                else:
+                    loop1 = False
+
+            all_steps_d += step_d
+            all_steps_t += step_t
             print('Epoch %d - %f, %f' % (epoch, loss1.detach().cpu().numpy(), loss2.detach().cpu().numpy()))
 
     

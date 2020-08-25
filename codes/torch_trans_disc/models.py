@@ -54,7 +54,7 @@ class Transformer(nn.Module):
         super(Transformer,self).__init__()
         self.layer_0 = nn.Linear(data_shape,latent_shape)
         self.layer_0_0 = nn.Linear(latent_shape,latent_shape)
-        # self.layer_0_1 = nn.Linear(latent_shape,latent_shape)
+        self.layer_0_1 = nn.Linear(latent_shape,latent_shape)
         # self.layer_0_2 = nn.Linear(latent_shape,latent_shape)
 
         self.layer_1 = nn.Linear(latent_shape,data_shape-2)
@@ -62,7 +62,7 @@ class Transformer(nn.Module):
         self.label_dim = label_dim
 
     def forward(self,X):
-        X = (self.layer_1((self.leaky_relu(self.layer_0_0(self.leaky_relu(self.layer_0(X)))))))
+        X = (self.layer_1((self.leaky_relu(self.layer_0_1(self.leaky_relu(self.layer_0_0(self.leaky_relu(self.layer_0(X)))))))))
         if self.label_dim:
             lab = torch.sigmoid(X[:,-1])
             # X_new = self.leaky_relu(X[:,:-1])
@@ -127,19 +127,19 @@ def transformer_loss(trans_output,is_wasserstein=False):
         return trans_output
     return bxe(torch.ones_like(trans_output), trans_output)
 
-def discounted_transformer_loss(real_data, trans_data, trans_output, pred_class, actual_class,is_wasserstein=False):
+def discounted_transformer_loss(real_data, trans_data, ot_data,trans_output, pred_class, actual_class,is_wasserstein=False):
 
     time_diff = torch.exp(-(real_data[:,-1] - real_data[:,-2]))
 
 
-    re_loss = reconstruction_loss(real_data[:,0:-2], trans_data)
+    re_loss = reconstruction_loss(ot_data, trans_data)
     tr_loss = transformer_loss(trans_output,is_wasserstein)
     # transformed_class = trans_data[:,-1].view(-1,1)
 
     # print(actual_class,pred_class)
     class_loss = bxe(actual_class,pred_class)
     
-    loss = torch.mean(time_diff * tr_loss + ((1-time_diff) * re_loss) + 0.5*class_loss)
+    loss = torch.mean(1.*time_diff * tr_loss + (1-time_diff) * re_loss + 0.5*class_loss)
     # loss = tr_loss.mean()
     return loss, tr_loss.mean(),re_loss.mean(), class_loss.mean()
 
