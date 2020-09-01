@@ -79,11 +79,11 @@ def train_classifier(X, Y, classifier, transformer, classifier_optimizer):
 
     classifier_optimizer.zero_grad()
     X_pred = transformer(X)
-    domain_info = tf.reshape(X[:,-2], [-1,1])
-    X_pred_domain_info = tf.cat([X_pred, domain_info], axis=1)
+    domain_info = X[:,-1].view(-1,1)
+    X_pred_domain_info = torch.cat([X_pred, domain_info], dim=1)
     Y_pred = classifier(X_pred_domain_info)
     
-    pred_loss = classification_loss(Y_pred, Y)
+    pred_loss = classification_loss(Y_pred, Y)/BATCH_SIZE
 
     pred_loss.backward()
     classifier_optimizer.step()
@@ -112,13 +112,13 @@ def train_classifier_d(X, Y, classifier, classifier_optimizer,verbose=False):
     return pred_loss
 
 
-EPOCH = 700
-CLASSIFIER_EPOCHS = 150
+EPOCH = 900
+CLASSIFIER_EPOCHS = 300
 SUBEPOCH = 10
 BATCH_SIZE = 64
 DISC_BATCH_SIZE=64
 SHUFFLE_BUFFER_SIZE=4096
-IS_WASSERSTEIN = False
+IS_WASSERSTEIN = True
 
 def train(X_data, Y_data, U_data, num_indices, source_indices, target_indices):
 
@@ -133,7 +133,7 @@ def train(X_data, Y_data, U_data, num_indices, source_indices, target_indices):
     U_target = U_data[target_indices]
 
 
-    transformer = Transformer(4, 6)
+    transformer = Transformer(4, 7)
     discriminator = Discriminator(3, 3,IS_WASSERSTEIN)
     classifier = ClassifyNet(3,3,2)
 
@@ -270,76 +270,123 @@ def train(X_data, Y_data, U_data, num_indices, source_indices, target_indices):
             print('Epoch %d - %f, %f' % (epoch, loss1.detach().cpu().numpy(), loss2.detach().cpu().numpy()))
 
     
-    # for i in range(len(X_target)):
-    #     target_dataset = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(X_target[i]).float(), torch.tensor(U_target[i]).float(), torch.tensor(Y_target[i]).float()),BATCH_SIZE,True)
-    #     source_dataset = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(X_past).float(), torch.tensor(U_past).float(), torch.tensor(Y_past).float()),BATCH_SIZE,True)
+    print("___________TESTING____________")
+    for i in range(len(X_target)):
+        # print(U_target[i])
+        target_dataset = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(X_target[i]).float(), torch.tensor(U_target[i]).float(), torch.tensor(Y_target[i]).float()),BATCH_SIZE,False)
+        source_dataset = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(X_past).float(), torch.tensor(U_past).float(), torch.tensor(Y_past).float()),BATCH_SIZE,False)
 
 
-    #     step = 0
-    #     for epoch in range(EPOCH):
+        step = 0
+        for epoch in range(CLASSIFIER_EPOCHS):
 
-    #         loss = 0
+            loss = 0
             
-    #         for batch_X, batch_U, batch_Y in source_dataset:
-    #             # print("Training")
+            for batch_X, batch_U, batch_Y in source_dataset:
+                batch_U = batch_U.view(-1,1)
+                this_U = torch.tensor([U_target[i][0]]*batch_U.shape[0]).float()
+                this_U = this_U.view(-1,1)
+                batch_X = torch.cat([batch_X, batch_U, this_U], dim=1)
+                step += 1
+                loss += train_classifier(batch_X, batch_Y, classifier,transformer, classifier_optimizer)
 
-    #             # batch_X = tf.cast(batch_X, dtype=tf.float32)
-    #             # batch_Y = tf.cast(batch_Y, dtype=tf.float32)
-    #             # batch_U = tf.cast(batch_U, dtype=tf.float32)
-
-    #             # batch_U = tf.reshape(batch_U, [-1,1])
-    #             # this_U = tf.constant([U_target[i][0]]*batch_U.shape[0], dtype=tf.float32)
-    #             # this_U = tf.reshape(this_U, [-1,1])
-    #             # batch_X = tf.cat([batch_X, batch_U, this_U], axis=1)
-    #             batch_U = batch_U.view(-1,1)
-    #             this_U = torch.tensor([U_source[index][0]]*batch_U.shape[0]).float()
-    #             this_U = this_U.view(-1,1)
-    #             batch_X = torch.cat([batch_X, batch_U, this_U], dim=1)
-    #             step += 1
-    #             loss += train_classifier_d(batch_X, batch_Y, classifier, classifier_optimizer, verbose=False)
-
-    #         # target_dataset = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(X_target[i]).float(), torch.tensor(U_target[i]).float(), torch.tensor(Y_target[i]).float()),BATCH_SIZE,True)
-    #         # source_dataset = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(X_past).float(), torch.tensor(U_past).float(), torch.tensor(Y_past).float()),BATCH_SIZE,True)
-    #            # print("%f" % loss)
-    #         print('Epoch: %d - ClassificationLoss: %f' % (epoch, loss))
+            # target_dataset = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(X_target[i]).float(), torch.tensor(U_target[i]).float(), torch.tensor(Y_target[i]).float()),BATCH_SIZE,True)
+            # source_dataset = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(X_past).float(), torch.tensor(U_past).float(), torch.tensor(Y_past).float()),BATCH_SIZE,True)
+               # print("%f" % loss)
+            print('Epoch: %d - ClassificationLoss: %f' % (epoch, loss))
 
         
-    #     #print(classifier.trainable_variables)
-    #     Y_pred = []
-    #     for batch_X, batch_U, batch_Y in target_dataset:
+        #print(classifier.trainable_variables)
+        Y_pred = []
+        Y_label = []
+        for batch_X, batch_U, batch_Y in target_dataset:
 
-    #         # batch_X = tf.cast(batch_X, dtype=tf.float32)
-    #         # batch_Y = tf.cast(batch_Y, dtype=tf.float32)
-    #         # batch_U = tf.cast(batch_U, dtype=tf.float32)
 
-    #         # batch_U = tf.reshape(batch_U, [-1,1])
-    #         # this_U = tf.constant([U_target[i][0]]*batch_U.shape[0], dtype=tf.float32)
-    #         # this_U = tf.reshape(this_U, [-1,1])
-    #         # batch_X = tf.cat([batch_X, batch_U, this_U], axis=1)
+            batch_U = batch_U.view(-1,1)
+            # this_U = torch.tensor([U_source[index][0]]*batch_U.shape[0]).float()
+            this_U = batch_U.view(-1,1)
+            batch_X = torch.cat([batch_X, batch_U, this_U], dim=1)
+            #batch_X_pred = transformer(batch_X)
+            #domain_info = tf.reshape(batch_X[:,-2], [-1,1])
+            #X_pred_domain_info = tf.cat([batch_X_pred, domain_info], axis=1)
+            batch_Y_pred = classifier(batch_X[:,0:-1]).detach().cpu().numpy()
 
-    #         batch_U = batch_U.view(-1,1)
-    #         this_U = torch.tensor([U_source[index][0]]*batch_U.shape[0]).float()
-    #         this_U = this_U.view(-1,1)
-    #         batch_X = torch.cat([batch_X, batch_U, this_U], dim=1)
-    #         #batch_X_pred = transformer(batch_X)
-    #         #domain_info = tf.reshape(batch_X[:,-2], [-1,1])
-    #         #X_pred_domain_info = tf.cat([batch_X_pred, domain_info], axis=1)
-    #         batch_Y_pred = classifier(batch_X[:,0:-1]).detach().cpu().numpy()
+            Y_pred = Y_pred + [batch_Y_pred]
+            Y_label = Y_label + [batch_Y]
 
-    #         Y_pred = Y_pred + [batch_Y_pred]
-
-    #     Y_pred = np.vstack(Y_pred)
-    #     print('shape: ',Y_pred.shape)
-    #     print(Y_pred)
-    #     Y_pred = np.array([0 if y[0] > y[1] else 1 for y in Y_pred])
-    #     Y_true = np.array([0 if y[0] > y[1] else 1 for y in Y_target[i]])
-    #     print(accuracy_score(Y_true, Y_pred))
-    #     print(confusion_matrix(Y_true, Y_pred))
-    #     print(classification_report(Y_true, Y_pred))    
+        Y_pred = np.vstack(Y_pred)
+        Y_label = np.vstack(Y_label)
+        print('shape: ',Y_pred.shape)
+        # print(Y_pred)
+        Y_pred = np.array([0 if y[0] > y[1] else 1 for y in Y_pred])
+        Y_true = np.array([0 if y[0] > y[1] else 1 for y in Y_label])
+        print(accuracy_score(Y_true, Y_pred))
+        print(confusion_matrix(Y_true, Y_pred))
+        print(classification_report(Y_true, Y_pred))    
     return transformer,discriminator,classifier
 
 
+
+def train_baselines(X_data,Y_data,U_data,num_indices, source_indices, target_indices):
+    I_d = np.eye(num_indices)
+
+    X_source = X_data[source_indices]
+    Y_source = Y_data[source_indices]
+    U_source = U_data[source_indices]
+
+    X_target = X_data[target_indices]
+    Y_target = Y_data[target_indices]
+    U_target = U_data[target_indices]
+
+    classifier = ClassifyNet(3,3,2)
+
+    classifier_optimizer    = torch.optim.Adagrad(classifier.parameters(),5e-2)
+
+    writer = SummaryWriter(comment='{}'.format(time.time()))
+
+    ## BASELINE 1- Sequential training with no adaptation ##
+    for i in source_indices:
+        X_past = X_source[0]
+        U_past = U_source[0]
+        Y_past = Y_source[0]
+        
+        past_data = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(X_past).float(),
+                                                        torch.tensor(U_past).float(), torch.tensor(Y_past).float()),BATCH_SIZE,True)
+        for epoch in range(EPOCH):
+            loss = 0
+            for batch_X,batch_U,batch_Y in past_data:
+                batch_U = batch_U.view(-1,1)
+                batch_X = torch.cat([batch_X, batch_U], dim=1)
+                # step += 1
+                loss += train_classifier_d(batch_X, batch_Y, classifier, classifier_optimizer, verbose=False)
+            print('Epoch %d - %f' % (epoch, loss.detach().cpu().numpy()))
+
+    print("___________TESTING____________")
+    for i in range(len(X_target)):
+        print(U_target[i])
+        target_dataset = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(X_target[i]).float(), torch.tensor(U_target[i]).float(), torch.tensor(Y_target[i]).float()),BATCH_SIZE,False)
+        Y_pred = []
+        for batch_X, batch_U, batch_Y in target_dataset:
+
+            batch_U = batch_U.view(-1,1)
+            batch_X = torch.cat([batch_X, batch_U], dim=1)
+            batch_Y_pred = classifier(batch_X).detach().cpu().numpy()
+
+            Y_pred = Y_pred + [batch_Y_pred]  
+        Y_pred = np.vstack(Y_pred)
+        print('shape: ',Y_pred.shape)
+        # print(Y_pred)
+        Y_pred = np.array([0 if y[0] > y[1] else 1 for y in Y_pred])
+        Y_true = np.array([0 if y[0] > y[1] else 1 for y in Y_target[i]])
+
+        # print(Y_pred-Y_true)
+        print(accuracy_score(Y_true, Y_pred))
+        print(confusion_matrix(Y_true, Y_pred))
+        print(classification_report(Y_true, Y_pred))    
+    return None,None,classifier
+ 
+      
 if __name__ == "__main__":
     X_data, Y_data, U_data = load_moons(11)
 
-    classification(X_data, Y_data, U_data, 11, [7,8], [9,10])
+    train_baselines(X_data, Y_data, U_data, 11, [7,8], [9,10])
