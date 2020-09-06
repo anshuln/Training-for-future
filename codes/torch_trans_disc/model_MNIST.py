@@ -162,7 +162,7 @@ def classification_loss(Y_pred, Y, n_classes=10):
     # print(Y.shape,Y_pred.shape)
     Y_new = torch.zeros_like(Y_pred)
     Y_new[Y] = 1.0
-    return  -1.*torch.sum((Y_new * torch.log(Y_pred+ 1e-5)))
+    return  -1.*torch.sum((Y_new * torch.log(Y_pred+ 1e-5)),dim=1)
 
 def bxe(real, fake):
     return -1.*((real*torch.log(fake+ 1e-5)) + ((1-real)*torch.log(1-fake + 1e-5)))
@@ -188,6 +188,8 @@ def discriminator_loss_wasserstein(real_output, trans_output):
 
 def reconstruction_loss(x,y):
     # print(torch.cat([x,y],dim=1))
+    if len(x.shape) == 3:
+        x = nn.Flatten()(x)
     return torch.sum((x-y)**2,dim=1)
 
 
@@ -197,19 +199,19 @@ def transformer_loss(trans_output,is_wasserstein=False):
         return trans_output
     return bxe(torch.ones_like(trans_output), trans_output)
 
-def discounted_transformer_loss(real_data, trans_data, ot_data,trans_output, pred_class, actual_class,is_wasserstein=False):
+def discounted_transformer_loss(real_data, trans_data,trans_output, pred_class, actual_class,is_wasserstein=False):
 
-    time_diff = torch.exp(-(real_data[:,-1] - real_data[:,-2]))
+    # time_diff = torch.exp(-(real_data[:,-1] - real_data[:,-2]))
+    #TODO put time_diff
 
 
-    re_loss = reconstruction_loss(ot_data, trans_data)
+    re_loss = reconstruction_loss(real_data, trans_data)
     tr_loss = transformer_loss(trans_output,is_wasserstein)
     # transformed_class = trans_data[:,-1].view(-1,1)
 
     # print(actual_class,pred_class)
-    class_loss = bxe(actual_class,pred_class)
-    
-    loss = torch.mean(1.*time_diff * tr_loss + (1-time_diff) * re_loss + 0.5*class_loss)
+    class_loss = classification_loss(pred_class,actual_class)
+    loss = torch.mean(  tr_loss.squeeze() +  re_loss + 0.5*class_loss)
     # loss = tr_loss.mean()
     return loss, tr_loss.mean(),re_loss.mean(), class_loss.mean()
 
