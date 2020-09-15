@@ -17,7 +17,7 @@ from data_loaders import *
 # from regularized_ot import *
 device = "cuda:2"
 
-def train_transformer_batch(X,Y,source_u,dest_u,transformer,discriminator,classifier,transformer_optimizer,is_wasserstein=False):
+def train_transformer_batch(X,Y,transported_X,source_u,dest_u,transformer,discriminator,classifier,transformer_optimizer,is_wasserstein=False):
 
     transformer_optimizer.zero_grad()
     X_pred = transformer(X,torch.cat([source_u,dest_u],dim=1))
@@ -29,7 +29,7 @@ def train_transformer_batch(X,Y,source_u,dest_u,transformer,discriminator,classi
     # X_pred_class = torch.cat([X_pred,domain_info],dim=1)
     pred_class = classifier(X_pred, dest_u)
 
-    trans_loss,ld,lr, lc = discounted_transformer_loss(X, X_pred,is_real, pred_class,Y,is_wasserstein)
+    trans_loss,ld,lr, lc = discounted_transformer_loss(transported_X, X_pred,is_real, pred_class,Y,is_wasserstein)
 
     # gradients_of_transformer = trans_tape.gradient(trans_loss, transformer.trainable_variables)
     trans_loss.backward()
@@ -148,15 +148,19 @@ def train(num_indices, source_indices, target_indices):
     # writer = SummaryWriter(comment='{}'.format(time.time()))
 
     ot_maps = [[None for x in range(len(source_indices))] for y in range(len(source_indices))]
-
-    # for i in range(len(source_indices)):
-    #   for j in range(len(source_indices)):
-    #       if i!=j:
-    #           ot_sinkhorn = RegularizedSinkhornTransport(reg_e=0.5, alpha=10, max_iter=50, norm="median", verbose=False)
-    #           ot_sinkhorn.fit(Xs=X_data[source_indices[i]]+1e-6, ys=Y_data[source_indices[i]]+1e-6, Xt=X_data[source_indices[j]]+1e-6, yt=Y_data[source_indices[j]]+1e-6, iteration=0)
-    #           ot_maps[i][j] = ot_sinkhorn.transform(X_data[source_indices[i]]+1e-6)
-    #       else:
-    #           ot_maps[i][j] = X_data[source_indices[i]]
+    mnist_ind = (np.arange(NUM_TRAIN_DOMAIN*10000))
+    np.random.shuffle(mnist_ind)
+    mnist_ind = np.tile(mnist_ind[:1000],NUM_TRAIN_DOMAIN)
+    ot_data = [torch.utils.data.DataLoader(RotMNIST(indices=mnist_ind[:1000],bin_width=BIN_WIDTH,bin_index=x-1,n_bins=NUM_TRAIN_DOMAIN),1000,False) for x in source_indices]#len(source_indices))
+    mnist_data = RotMNIST(indices=mnist_ind,bin_width=BIN_WIDTH,bin_index=0,n_bins=6)
+    for i in range(len(source_indices)):
+      for j in range(len(source_indices)):
+          if i!=j:
+              ot_sinkhorn = RegularizedSinkhornTransport(reg_e=0.5, alpha=10, max_iter=50, norm="median", verbose=False)
+              ot_sinkhorn.fit(Xs=next(iter(ot_data[i]))[0].view(1000,-1).detach().cpu().numpy()+1e-6, ys=None, Xt=next(iter(ot_data[j]))[0].view(1000,-1).detach().cpu().numpy()+1e-6, yt=None, iteration=0)
+              ot_maps[i][j] = ot_sinkhorn.transform(next(iter(ot_data[i]))[0].view(1000,-1).detach().cpu().numpy()+1e-6).reshape((1000,28,28))
+          else:
+              ot_maps[i][j] = next(iter(ot_data[i]))[0].view(1000,28,28).detach().cpu().numpy()
     # print(ot_maps)
     # # assert False
     # for class_index in range(1,len(X_source)):
@@ -167,9 +171,7 @@ def train(num_indices, source_indices, target_indices):
     # print(ot_maps)
     print("-------------TRAINING CLASSIFIER----------")
     class_step = 0
-    mnist_ind = (np.arange(NUM_TRAIN_DOMAIN*10000))
-    np.random.shuffle(mnist_ind)
-    mnist_data = RotMNIST(indices=mnist_ind[:source_indices[-1]*10000],bin_width=BIN_WIDTH,bin_index=0,n_bins=NUM_TRAIN_DOMAIN)#len(source_indices))
+
     for epoch in range(CLASSIFIER_EPOCHS):
         past_dataset = torch.utils.data.DataLoader((mnist_data),BATCH_SIZE,True)
         class_loss = 0
@@ -191,7 +193,7 @@ def train(num_indices, source_indices, target_indices):
         print('Domain %d' %index)
         print('----------------------------------------------------------------------------------------------')
 
-        past_data = (RotMNIST(indices=mnist_ind[:source_indices[index-1]*(60000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=0,n_bins=6)) #,BATCH_SIZE,True)
+        past_data = (RotMNIST(indices=mnist_ind[:source_indices[index-1]*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=source_indices[0]-1,n_bins=6)) #,BATCH_SIZE,True)
         # present_dataset = torch.utils.data.Dataloader(torch.utils.data.TensorDataset(X_source[index], U_source[index], 
         #                   Y_source[index]),BATCH_SIZE,True,repeat(
         #                   math.ceil(X_past.shape[0]/X_source[index].shape[0])))
@@ -202,12 +204,12 @@ def train(num_indices, source_indices, target_indices):
         # Y_past = np.vstack([Y_past, Y_source[index]])
         # U_past = np.hstack([U_past, U_source[index]])
         
-        p = RotMNIST(indices=mnist_ind[:source_indices[(index)]*(60000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=0,n_bins=6)
+        p = RotMNIST(indices=mnist_ind[:source_indices[(index-1)]*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=source_indices[0]-1,n_bins=6,transported_samples=ot_maps,target_bin=source_indices[index]-1)
 
         print(len(p))  # TODO
         all_data = torch.utils.data.DataLoader(p,
                     BATCH_SIZE,True)            # for batch_X, batch_U, batch_Y, batch_transported in all_dataset:
-        curr_data = torch.utils.data.DataLoader(RotMNIST(indices=mnist_ind[source_indices[index-1]*(60000//NUM_TRAIN_DOMAIN):source_indices[(index)]*(60000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=index-1,n_bins=6),BATCH_SIZE,True,drop_last=True)
+        curr_data = torch.utils.data.DataLoader(RotMNIST(indices=mnist_ind[source_indices[index-1]*(6000//NUM_TRAIN_DOMAIN):source_indices[(index)]*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=source_indices[index-1]-1,n_bins=6),BATCH_SIZE,True,drop_last=True)
         num_all_batches  = len(p) // BATCH_SIZE
         all_steps_t = 0
         all_steps_d = 0
@@ -252,7 +254,7 @@ def train(num_indices, source_indices, target_indices):
                 else:
                     loop2 = False
                 if step_t < num_all_batches:
-                    batch_X, batch_U, batch_Y = next(all_dataset)
+                    batch_X, batch_U, batch_Y, batch_transported = next(all_dataset)
                     batch_U = batch_U.view(-1,2)
                     this_U = np.array([U_source[index]*BIN_WIDTH]*batch_U.shape[0]).reshape((batch_U.shape[0],1)) +\
                              np.random.randint(0,5,size=(batch_U.shape[0],1))
@@ -260,7 +262,7 @@ def train(num_indices, source_indices, target_indices):
                                         this_U/(BIN_WIDTH * 6)])
                     this_U = torch.tensor(this_U).float().view(-1,2).to(device)
                     # print(batch_X.size(),batch_U.size(),this_U.size(),batch_transported.size())
-                    loss_t,ltd,lr,lc = train_transformer_batch(batch_X,batch_Y,batch_U,this_U,
+                    loss_t,ltd,lr,lc = train_transformer_batch(batch_X,batch_Y,batch_transported,batch_U,this_U,
                                     transformer,discriminator,classifier,
                                     transformer_optimizer,is_wasserstein=IS_WASSERSTEIN) #train_transformer_batch(batch_X)
                     loss1 += loss_t
@@ -283,7 +285,7 @@ def train(num_indices, source_indices, target_indices):
     for i in range(len(target_indices)):
         print(U_target[i])
 
-        source_dataset = torch.utils.data.DataLoader(RotMNIST(indices=mnist_ind[:source_indices[-1]*(60000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=0,n_bins=6),BATCH_SIZE,True)
+        source_dataset = torch.utils.data.DataLoader(RotMNIST(indices=mnist_ind[:source_indices[-1]*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=0,n_bins=6),BATCH_SIZE,True)
 
 
 
@@ -309,8 +311,8 @@ def train(num_indices, source_indices, target_indices):
         #print(classifier.trainable_variables)
         index = target_indices[i]
         print(index)
-        td = RotMNIST(indices=mnist_ind[(index-1)*(60000//NUM_TRAIN_DOMAIN):(index)*(60000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=index-1,n_bins=6)
-        print(len(mnist_ind[(index-1)*(60000//NUM_TRAIN_DOMAIN):(index)*(60000//NUM_TRAIN_DOMAIN)]))
+        td = RotMNIST(indices=mnist_ind[(index-1)*(6000//NUM_TRAIN_DOMAIN):(index)*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=index-1,n_bins=6)
+        print(len(mnist_ind[(index-1)*(6000//NUM_TRAIN_DOMAIN):(index)*(6000//NUM_TRAIN_DOMAIN)]))
         target_dataset = torch.utils.data.DataLoader(td,BATCH_SIZE,False,drop_last=True)
         Y_pred = []
         Y_label = []
