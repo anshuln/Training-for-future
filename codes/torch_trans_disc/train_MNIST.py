@@ -181,8 +181,8 @@ def train(num_indices, source_indices, target_indices):
 	for i in range(len(source_indices)):
 	  for j in range(i,len(source_indices)):
 		  if i!=j:
-			  ot_sinkhorn = RegularizedSinkhornTransport(reg_e=0.5, alpha=10, max_iter=50, norm="median", verbose=False)
-			  ot_sinkhorn.fit(Xs=next(iter(ot_data[i]))[0].view(1000,-1).detach().cpu().numpy()+1e-6, ys=None, Xt=next(iter(ot_data[j]))[0].view(1000,-1).detach().cpu().numpy()+1e-6, yt=None, iteration=0)
+			  ot_sinkhorn = RegularizedSinkhornTransportOTDA(reg_e=0.5, alpha=10, max_iter=50, norm="max", verbose=False)
+			  ot_sinkhorn.fit(Xs=next(iter(ot_data[i]))[0].view(1000,-1).detach().cpu().numpy()+1e-6, ys=next(iter(ot_data[i]))[2].view(1000,-1).detach().cpu().numpy(), Xt=next(iter(ot_data[j]))[0].view(1000,-1).detach().cpu().numpy()+1e-6, yt=next(iter(ot_data[j]))[2].view(1000,-1).detach().cpu().numpy(), iteration=0)
 			  ot_maps[i][j] = ot_sinkhorn.transform(next(iter(ot_data[i]))[0].view(1000,-1).detach().cpu().numpy()+1e-6).reshape((1000,28,28))
 			  show_images([next(iter(ot_data[i]))[0],next(iter(ot_data[j]))[0],ot_maps[i][j]],num=4,fname='{}-{}.png'.format(i,j))
 		  else:
