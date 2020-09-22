@@ -6,7 +6,7 @@ from torchvision.transforms.functional import rotate
 import torch
 import os
 from PIL import Image
-device = "cuda:2"
+device = "cuda:0"
 def load_twitter(files_list):
 
 	domains = 5
@@ -110,54 +110,54 @@ class TransformerDataset(torch.utils.data.Dataset):
 
 
 class RotMNIST(torch.utils.data.Dataset):
-    '''
-    Class which returns (image,label,angle,bin)
-    TODO - 1. Shuffle indices, bin and append angles
-           2. Return 
-           3. OT - make sure OT takes into account the labels, i.e. OT loss should be inf for interchanging labels.  
-    '''
-    def __init__(self,indices,bin_width,bin_index,n_bins,transported_samples=None,target_bin=None,n_samples=6000):
-        '''
-        You give it a set of indices, along with which bins they belong
-        It returns images from that MNIST bin
-        usage - indices = np.random.shuffle(np.arange(n_samples)) 
-        '''
-        self.indices = indices # np.random.shuffle(np.arange(n_samples))
-        self.bins    = (np.arange(n_samples)/(n_samples/n_bins)).astype('int') + bin_index
-        self.n_bins  = n_bins
-        self.bin_width = bin_width
-        self.transported_samples = transported_samples
-        self.target_bin = target_bin
-        # self.angles  = self.bins*bin_width + np.random.randint(bin_width-5,bin_width-1,indices.shape)
-        # self.normalized_angles  = self.angles/(bin_width * n_bins)
-        root = '../../data/'
-        processed_folder = os.path.join(root, 'MNIST', 'processed')
-        data_file = 'training.pt'
-        # print(self.bins,self.bin_width)
-        # print("---------- READING MNIST ----------")
-        self.data, self.targets = torch.load(os.path.join(processed_folder, data_file))
+	'''
+	Class which returns (image,label,angle,bin)
+	TODO - 1. Shuffle indices, bin and append angles
+		   2. Return 
+		   3. OT - make sure OT takes into account the labels, i.e. OT loss should be inf for interchanging labels.  
+	'''
+	def __init__(self,indices,bin_width,bin_index,n_bins,transported_samples=None,target_bin=None,n_samples=6000):
+		'''
+		You give it a set of indices, along with which bins they belong
+		It returns images from that MNIST bin
+		usage - indices = np.random.shuffle(np.arange(n_samples)) 
+		'''
+		self.indices = indices # np.random.shuffle(np.arange(n_samples))
+		self.bins    = (np.arange(n_samples)/(n_samples/n_bins)).astype('int') + bin_index
+		self.n_bins  = n_bins
+		self.bin_width = bin_width
+		self.transported_samples = transported_samples
+		self.target_bin = target_bin
+		# self.angles  = self.bins*bin_width + np.random.randint(bin_width-5,bin_width-1,indices.shape)
+		# self.normalized_angles  = self.angles/(bin_width * n_bins)
+		root = '../../data/'
+		processed_folder = os.path.join(root, 'MNIST', 'processed')
+		data_file = 'training.pt'
+		# print(self.bins,self.bin_width)
+		# print("---------- READING MNIST ----------")
+		self.data, self.targets = torch.load(os.path.join(processed_folder, data_file))
 
-    def __getitem__(self,idx):
-        index = self.indices[idx]
-        bin   = torch.tensor(self.bins[idx]).to(device).float()
-        # angle = self.angles[idx]
-        angle = bin.item() * self.bin_width + np.random.randint(5)
-        norm_angle = 1.0*angle/(self.bin_width * self.n_bins)
-        image = self.data[index]
-        image = Image.fromarray(image.numpy(), mode='L')
+	def __getitem__(self,idx):
+		index = self.indices[idx]
+		bin   = torch.tensor(self.bins[idx]).to(device).float()
+		# angle = self.angles[idx]
+		angle = bin.item() * self.bin_width + np.random.randint(5)
+		norm_angle = 1.0*angle/(self.bin_width * self.n_bins)
+		image = self.data[index]
+		image = Image.fromarray(image.numpy(), mode='L')
 
-        target = self.targets[index]
-        image = np.array(rotate(image,angle))#).float().to(device)
-        image = torch.tensor(image).to(torch.float).to(device)/(255.0)
-        target = target.to(device)
+		target = self.targets[index]
+		image = np.array(rotate(image,angle))#).float().to(device)
+		image = torch.tensor(image).to(torch.float).to(device)/(255.0)
+		target = target.to(device)
 
-        if self.transported_samples is not None:
-            transported_X = self.transported_samples[self.bins[idx]][self.target_bin][idx % 1000] #This should be similar to index fun    #.transform(X_item[
-            return image,torch.cat([(bin/self.n_bins).float().view(1),torch.tensor(norm_angle).float().to(device).view(1)],dim=0).to(device),target, torch.from_numpy(transported_X).float().to(device)
-        
-        # print(bin,norm_angle)
+		if self.transported_samples is not None:
+			transported_X = self.transported_samples[self.bins[idx]][self.target_bin][idx % 1000] #This should be similar to index fun    #.transform(X_item[
+			return image,torch.cat([(bin/self.n_bins).float().view(1),torch.tensor(norm_angle).float().to(device).view(1)],dim=0).to(device),target, torch.from_numpy(transported_X).float().to(device)
+		
+		# print(bin,norm_angle)
 
-        return image,torch.cat([(bin/self.n_bins).float().view(1),torch.tensor(norm_angle).float().to(device).view(1)],dim=0).to(device),target
+		return image,torch.cat([(bin/self.n_bins).float().view(1),torch.tensor(norm_angle).float().to(device).view(1)],dim=0).to(device),target
 
-    def __len__(self):
-        return len(self.indices)
+	def __len__(self):
+		return len(self.indices)
