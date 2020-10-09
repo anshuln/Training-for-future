@@ -188,11 +188,11 @@ class Discriminator(nn.Module):
 		if time_conditioning:
 			self.layer_1 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3)
 			self.layer_2 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3)
-			self.relu_1 = TimeReLU(200*64,2,leaky)
-			self.relu_2 = TimeReLU(72*64,2,leaky)
+			self.relu_1 = TimeReLU(200*8,2,leaky)
+			self.relu_2 = TimeReLU(72*8,2,leaky)
 			# self.relu_t = nn.ReLU()
 		self.down_sampling = nn.MaxPool2d(kernel_size=2, stride=2)
-		self.out_layer = nn.Linear(72*64,1)
+		self.out_layer = nn.Linear(72*8,1)
 		# self.out_relu = TimeReLU(1,2,leaky)
 
 	def forward(self,X,times):
