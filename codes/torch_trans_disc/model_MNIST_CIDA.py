@@ -59,10 +59,10 @@ class ClassifyNet(nn.Module):
 			times_ = times.unsqueeze(1).unsqueeze(2).repeat(1,1,28,28)
 			X = torch.cat([X,times],dim=1)
 
-		X  = self.conv1(X)
-		X  = self.conv2(X)
-		X  = self.conv3(X)
-		X  = self.conv4(X)
+		X  = self.conv1(X,times)
+		X  = self.conv2(X,times)
+		X  = self.conv3(X,times)
+		X  = self.conv4(X,times)
 
 		X = self.out_layer(X.view(X.size(0),-1))
 		X = self.out_relu(X,times)
@@ -274,7 +274,8 @@ class Time2Vec(nn.Module):
 
 	def forward(self,t):
 		emb = self.mat(t)
-		emb = torch.cat([emb[:,0],self.activation(emb[:,1:])],dim=1)
+		# print(emb.size())
+		emb = torch.cat([emb[:,:1],self.activation(emb[:,1:])],dim=1)
 		return emb
 
 class TimeEncodings(nn.Module):
