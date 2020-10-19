@@ -161,3 +161,74 @@ class RotMNIST(torch.utils.data.Dataset):
 
 	def __len__(self):
 		return len(self.indices)
+
+
+class RotMNISTCGrad(torch.utils.data.Dataset):
+	'''
+	Class which returns (image,label,angle,bin)
+	TODO - 1. Shuffle indices, bin and append angles
+		   2. Return 
+		   3. OT - make sure OT takes into account the labels, i.e. OT loss should be inf for interchanging labels.  
+	'''
+	def __init__(self,src_indices,target_indices,bin_width,bin_index,n_bins,target_bin=None,n_samples=6000):
+		'''
+		You give it a set of indices, along with which bins they belong
+		It returns images from that MNIST bin
+		usage - indices = np.random.shuffle(np.arange(n_samples)) 
+		'''
+		self.src_indices = src_indices # np.random.shuffle(np.arange(n_samples))
+		self.target_indices = target_indices # np.random.shuffle(np.arange(n_samples))
+		self.bins    = (np.arange(n_samples)/(n_samples/n_bins)).astype('int') + bin_index
+		self.n_bins  = n_bins
+		self.bin_width = bin_width
+		self.target_bin = target_bin
+		# self.angles  = self.bins*bin_width + np.random.randint(bin_width-5,bin_width-1,indices.shape)
+		# self.normalized_angles  = self.angles/(bin_width * n_bins)
+		self.target_labs = {}
+		root = '../../data/'
+		processed_folder = os.path.join(root, 'MNIST', 'processed')
+		data_file = 'training.pt'
+		# print(self.bins,self.bin_width)
+		# print("---------- READING MNIST ----------")
+		self.data, self.targets = torch.load(os.path.join(processed_folder, data_file))
+		for i in self.target_indices:
+			if self.targets[i].item() not in self.target_labs.keys():
+				self.target_labs[self.targets[i].item()] = [i]
+			else:
+				self.target_labs[self.targets[i].item()].append(i)
+		self.means = torch.tensor([0.485, 0.456, 0.406]).view(3,1,1)
+		self.stds  = torch.tensor([0.229, 0.224, 0.225]).view(3,1,1)
+	def __getitem__(self,idx):
+		index = self.src_indices[idx]
+		bin   = torch.tensor(self.bins[idx]).to(device).float()
+		# angle = self.angles[idx]
+		angle = bin.item() * self.bin_width + np.random.randint(5)
+		norm_angle = 1.0*angle/(self.bin_width * self.n_bins)
+		image = self.data[index]
+		image = Image.fromarray(image.numpy(), mode='L')
+
+		label = self.targets[index]
+		image = np.array(rotate(image,angle))#).float().to(device)
+		image = torch.tensor(image).to(torch.float)/(255.0)
+		image = image.unsqueeze(0).repeat(3,1,1)
+		image = (image - self.means)/self.stds
+		# target = target.to(device)
+		target_ids = self.target_labs[label.item()]
+		target_idx = target_ids[idx % len(target_ids)]
+
+		target_angle = self.target_bin * self.bin_width + np.random.randint(5)
+		target_norm_angle = 1.0*angle/(self.bin_width * self.n_bins)
+		target_image = self.data[target_idx]
+		target_image = Image.fromarray(target_image.numpy(), mode='L')
+
+		label = self.targets[index]
+		target_image = np.array(rotate(target_image,angle))#).float().to(device)
+		target_image = torch.tensor(target_image).to(torch.float)/(255.0)
+		target_image = target_image.unsqueeze(0).repeat(3,1,1)
+		target_image = (target_image - self.means)/self.stds
+		
+		# print(bin,norm_angle)
+
+		return image.to(device),target_image.to(device), torch.tensor(norm_angle - target_norm_angle)
+	def __len__(self):
+		return len(self.src_indices)        
