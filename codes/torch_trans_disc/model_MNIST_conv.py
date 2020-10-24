@@ -11,6 +11,10 @@ device = "cuda:0"
 
 class Encoder(nn.Module):
     """docstring for Encoder"""
+    '''Deprecated class for Encoder module
+    
+    We now use VGG for encoding. Also try an end-2-end encoder
+    '''
     def __init__(self):
         super(Encoder, self).__init__()
         self.layer_0 = nn.Conv2d(in_channels=1,out_channels=8,kernel_size=3)
@@ -24,33 +28,50 @@ class Encoder(nn.Module):
         X = self.layer_1(X)
         X = self.down_sampling(X)
         return X
+
+
 class GradNet(nn.Module):
-    def __init__(self,data_shape, hidden_shape, time_conditioning=True,leaky=False):
+    def __init__(self,data_shape, hidden_shape, time_conditioning=True,leaky=False,use_vgg=False):
         super(GradNet,self).__init__()
 
+        if use_vgg:
+            in_channels = 16
+        else:
+            in_channels = 1
 
         # self.time_encodings = TimeEncodings(data_shape,1)
-        self.layer_0 = nn.Conv2d(in_channels=64,out_channels=32,kernel_size=3)
+        self.layer_0 = nn.Conv2d(in_channels=in_channels,out_channels=32,kernel_size=3)
         self.relu_0    = nn.LeakyReLU()
         # self.relu_0 = nn.ReLU()
         # if time_conditioning:
         self.layer_1 = nn.Conv2d(in_channels=32,out_channels=64,kernel_size=3)
+        self.layer_2 = nn.Conv2d(in_channels=64,out_channels=64,kernel_size=3)
             # self.layer_2 = nn.Linear(hidden_shape,hidden_shape)
             # self.relu_t = nn.LeakyReLU()
         self.relu_t = nn.ReLU()
-        self.out_layer = nn.Linear(64*64*2,1)
+        self.down_sampling = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.out_layer = nn.Linear(3200,1)
         self.out_relu = nn.LeakyReLU()
 
     def forward(self,X1,X2):
         # times = X[:,-1:]
         # X = self.time_encodings(X)
         # print(X1.size())
+        if len(X1.size()) < 4:
+            X1 = X1.unsqueeze(1)
+        if len(X2.size()) < 4:
+            X2 = X2.unsqueeze(1)
         X1  = self.layer_0(X1)
         X1  = self.relu_0(X1)
 
         # if self.time_conditioning:
         X1 = self.layer_1(X1)
         X1 = self.relu_t(X1)
+        X1 = self.down_sampling(X1)
+        X1 = self.layer_2(X1)
+        X1 = self.relu_t(X1)
+
+        X1 = self.down_sampling(X1)
         # X1 = self.layer_2(X1)
         # X1 = self.relu_t(X1)
 
@@ -60,6 +81,10 @@ class GradNet(nn.Module):
         # if self.time_conditioning:
         X2 = self.layer_1(X2)
         X2 = self.relu_t(X2)
+        X2 = self.down_sampling(X2)
+        X2 = self.layer_2(X2)
+        X2 = self.relu_t(X2)
+        X2 = self.down_sampling(X2)
         # X2 = self.layer_2(X2)
         # X2 = self.relu_t(X2)
         # print(X1.size())
@@ -71,23 +96,27 @@ class GradNet(nn.Module):
         
         
 class ClassifyNet(nn.Module):
-    def __init__(self,data_shape, hidden_shape, n_classes, append_time=False,encode_time=True,time_conditioning=True,leaky=True):
+    def __init__(self,data_shape, hidden_shape, n_classes, append_time=False,encode_time=False,time_conditioning=True,leaky=True,use_vgg=False):
         super(ClassifyNet,self).__init__()
 
         self.time_conditioning = time_conditioning
         self.append_time = append_time
         self.encode_time = encode_time
-
-        if self.append_time:
-            in_channels = 3
+        if use_vgg:
+            in_channels = 16
         else:
             in_channels = 1
+
+        if self.append_time:
+            in_channels += 2
+        else:
+            in_channels += 0
         if self.encode_time:
             self.time_enc = TimeEncodings(784,2)
 
         self.flat = nn.Flatten()
         self.layer_0 = nn.Conv2d(in_channels=in_channels, out_channels=8, kernel_size=3)
-        self.relu_0    = TimeReLU(1352*in_channels,2,leaky)
+        self.relu_0    = TimeReLU(13*13*8,2,leaky)
         # self.relu_0 = nn.ReLU()
         if time_conditioning:
             self.layer_1 = nn.Conv2d(in_channels=8, out_channels=16, kernel_size=3)
@@ -100,7 +129,8 @@ class ClassifyNet(nn.Module):
         self.out_relu = TimeReLU(n_classes,2,leaky)
 
     def forward(self,X,times):
-        X = X.unsqueeze(1)
+        if len(X.size()) < 4:
+            X = X.unsqueeze(1)
         
         if self.encode_time:
             X = self.time_enc(X,times)
@@ -130,7 +160,7 @@ class ClassifyNet(nn.Module):
 
 
 class Transformer(nn.Module):
-    def __init__(self,data_shape, latent_shape,append_time=False,encode_time=True, label_dim=0):
+    def __init__(self,data_shape, latent_shape,append_time=False,encode_time=False, label_dim=0,use_vgg=False):
         '''
         Notes to self - 
             1. This should transform both X and Y
@@ -150,20 +180,23 @@ class Transformer(nn.Module):
         super(Transformer,self).__init__()
         self.append_time = append_time
         self.encode_time = encode_time
-
-        if self.append_time:
-            in_channels = 5
+        if use_vgg:
+            in_channels_base = 16
         else:
-            in_channels = 1
+            in_channels_base = 1
+        if self.append_time:
+            in_channels = in_channels_base + 4
+        else:
+            in_channels = in_channels_base +  0
         if self.encode_time:
             self.time_enc = TimeEncodings(784,2)
         self.flat = nn.Flatten()
-        self.layer_0 = ConvBlock(in_channels=in_channels,out_channels=8,kernel_size=3,time_relu_size=6272,time_shape=4)
-        self.layer_1 = ConvBlock(in_channels=8,out_channels=8,kernel_size=3,time_relu_size=3136//2,time_shape=4)
-        self.layer_2 = ConvBlock(in_channels=8,out_channels=16,kernel_size=3,time_relu_size=784,time_shape=4)
-        self.layer_3 = ConvBlock(in_channels=16,out_channels=8,kernel_size=3,time_relu_size=392,time_shape=4)
-        self.layer_4 = ConvBlock(in_channels=8,out_channels=8,kernel_size=3,time_relu_size=1568,time_shape=4)
-        self.layer_5 = ConvBlock(in_channels=8,out_channels=1,kernel_size=3,time_relu_size=784,time_shape=4)
+        self.layer_0 = ConvBlock(in_channels=in_channels,out_channels=8*8,kernel_size=3,time_relu_size=6272*8,time_shape=4)
+        self.layer_1 = ConvBlock(in_channels=8*8,out_channels=8*8,kernel_size=3,time_relu_size=3136*4,time_shape=4)
+        self.layer_2 = ConvBlock(in_channels=8*8,out_channels=16*8,kernel_size=3,time_relu_size=784*8,time_shape=4)
+        self.layer_3 = ConvBlock(in_channels=16*8,out_channels=8*8,kernel_size=3,time_relu_size=392*8,time_shape=4)
+        self.layer_4 = ConvBlock(in_channels=8*8,out_channels=8*8,kernel_size=3,time_relu_size=1568*8,time_shape=4)
+        self.layer_5 = ConvBlock(in_channels=8*8,out_channels=in_channels_base,kernel_size=3,time_relu_size=784*in_channels_base,time_shape=4)
         self.down_sampling = nn.MaxPool2d(kernel_size=2, stride=2, return_indices=True)
         self.up_sampling = nn.MaxUnpool2d(kernel_size=2, stride=2)
         # self.layer_0_2 = nn.Linear(latent_shape,latent_shape)
@@ -173,8 +206,9 @@ class Transformer(nn.Module):
     def forward(self,X,times):
         # times = X[:,-4:]
         # X = torch.cat([self.flat(X),times.view(-1,4)],dim=-1)
-        X = X.unsqueeze(1)
-        
+        if len(X.size()) < 4:
+            X = X.unsqueeze(1)
+
         if self.encode_time:
             X = self.time_enc(X,times)
 
@@ -210,7 +244,7 @@ class Transformer(nn.Module):
 
 
 class Discriminator(nn.Module):
-    def __init__(self,data_shape, hidden_shape, is_wasserstein=False,time_conditioning=True,append_time=False,encode_time=True,leaky=False):
+    def __init__(self,data_shape, hidden_shape, is_wasserstein=False,time_conditioning=True,append_time=False,encode_time=False,leaky=False,use_vgg=False):
 
         super(Discriminator,self).__init__()
         self.flat = nn.Flatten()
@@ -222,16 +256,20 @@ class Discriminator(nn.Module):
         self.append_time = append_time
         self.encode_time = encode_time
 
-        if self.append_time:
-            in_channels = 3
+        if use_vgg:
+            in_channels = 16
         else:
             in_channels = 1
+        if self.append_time:
+            in_channels += 2
+        else:
+            in_channels += 0
         if self.encode_time:
             self.time_enc = TimeEncodings(784,2)
 
         self.flat = nn.Flatten()
         self.layer_0 = nn.Conv2d(in_channels=in_channels, out_channels=8, kernel_size=3)
-        self.relu_0    = TimeReLU(1352*in_channels,2,leaky)
+        self.relu_0    = TimeReLU(1352*1,2,leaky)
         # self.relu_0 = nn.ReLU()
         if time_conditioning:
             self.layer_1 = nn.Conv2d(in_channels=8, out_channels=8, kernel_size=3)
@@ -244,8 +282,9 @@ class Discriminator(nn.Module):
         # self.out_relu = TimeReLU(1,2,leaky)
 
     def forward(self,X,times):
-        X = X.unsqueeze(1)
-        
+        if len(X.size()) < 4:
+            X = X.unsqueeze(1)
+
         if self.encode_time:
             X = self.time_enc(X,times)
 
@@ -377,7 +416,12 @@ def reconstruction_loss(x,y):
     # print(x.size(),y.size())
     # if len(x.shape) == 3:
     #     x = nn.Flatten()(x)
-    return torch.sum((x-y)**2,dim=1).sum(dim=1)
+
+    x_1 = x.view(x.size(0),-1)
+    y_1 = y.view(y.size(0),-1)
+    # print(torch.sum((x_1-y_1)**2,dim=1).size())
+    # print(x_1.size(),y_1.size(),torch.sum((x_1-y_1)**2,dim=1).size())
+    return torch.sum((x_1-y_1)**2,dim=1) #.sum(dim=1)
 
 
 def transformer_loss(trans_output,is_wasserstein=False):
@@ -392,13 +436,13 @@ def discounted_transformer_loss(rec_target_data, trans_data,trans_output, pred_c
     #TODO put time_diff
 
 
-    re_loss = reconstruction_loss(rec_target_data, trans_data)
-    tr_loss = transformer_loss(trans_output,is_wasserstein)
+    re_loss = reconstruction_loss(rec_target_data, trans_data).view(-1,1)
+    tr_loss = transformer_loss(trans_output,is_wasserstein).view(-1,1)
     # transformed_class = trans_data[:,-1].view(-1,1)
 
     # print(actual_class,pred_class)
-    class_loss = classification_loss(pred_class,actual_class)
-    loss = torch.mean( 1.0* tr_loss.squeeze() +  0.0*re_loss + 0.5*class_loss)
+    class_loss = classification_loss(pred_class,actual_class).view(-1,1)
+    loss = torch.mean( 0.0* tr_loss.squeeze() +  0.0*re_loss + 0.5*class_loss)
     # loss = tr_loss.mean()
     return loss, tr_loss.mean(),re_loss.mean(), class_loss.mean()
 

@@ -19,9 +19,24 @@ from torchvision import models as tv_models
 
 device = "cuda:0"
 
-def train_transformer_batch(X,Y,transported_X,source_u,dest_u,transformer,discriminator,classifier,transformer_optimizer,is_wasserstein=False):
+EPOCH = 5
+CLASSIFIER_EPOCHS = 25
+SUBEPOCH = 10
+BATCH_SIZE = 256
+DISC_BATCH_SIZE=64
+SHUFFLE_BUFFER_SIZE=4096
+IS_WASSERSTEIN = True
+NUM_TRAIN_DOMAIN = 6
+BIN_WIDTH = 15
 
+def train_transformer_batch(X,Y,transported_X,source_u,dest_u,transformer,discriminator,classifier,transformer_optimizer,is_wasserstein=False,encoder=None):
+    # print(X.size())
+    if encoder is not None:
+        with torch.no_grad():
+            X = encoder(X).view(-1,16,28,28)
+            # X_now = encoder(X_now).view(-1,16,28,28)
     transformer_optimizer.zero_grad()
+    # print(X.size())
     X_pred = transformer(X,torch.cat([source_u,dest_u],dim=1))
     # domain_info = X[:,-1].view(-1,1)
     # X_pred_domain_info = torch.cat([X_pred, domain_info], dim=1)
@@ -42,8 +57,13 @@ def train_transformer_batch(X,Y,transported_X,source_u,dest_u,transformer,discri
     return trans_loss, ld, lr, lc
 
 
-def train_discriminator_batch_wasserstein(X_old,source_u,dest_u, X_now, transformer, discriminator, discriminator_optimizer):
+def train_discriminator_batch_wasserstein(X_old,source_u,dest_u, X_now, transformer, discriminator, discriminator_optimizer,encoder=None):
     
+    if encoder is not None:
+        with torch.no_grad():
+            X_old = encoder(X_old).view(-1,16,28,28)
+            X_now = encoder(X_now).view(-1,16,28,28)
+    # print(X_old.size(),X_now.size())
     discriminator_optimizer.zero_grad()
     X_pred = transformer(X_old,torch.cat([source_u.to(device),dest_u.to(device)],dim=1))
     
@@ -61,8 +81,12 @@ def train_discriminator_batch_wasserstein(X_old,source_u,dest_u, X_now, transfor
         p.data.clamp_(-0.01, 0.01)
     return disc_loss
 
-def train_discriminator_batch(X_old, X_now, transformer, discriminator, discriminator_optimizer):
+def train_discriminator_batch(X_old, X_now, transformer, discriminator, discriminator_optimizer,encoder=None):
 
+    if encoder is not None:
+        with torch.no_grad():
+            X_old = encoder(X_old).view(-1,16,28,28)
+            X_now = encoder(X_now).view(-1,16,28,28)
     discriminator_optimizer.zero_grad()
     X_pred_old = transformer(X_old)
     domain_info = X_old[:,-1].view(-1,1)
@@ -80,9 +104,12 @@ def train_discriminator_batch(X_old, X_now, transformer, discriminator, discrimi
     return disc_loss
 
 
-def train_classifier(X, source_u,dest_u, Y, classifier, transformer, classifier_optimizer):
+def train_classifier(X, source_u,dest_u, Y, classifier, transformer, classifier_optimizer,encoder=None):
 
     classifier_optimizer.zero_grad()
+    if encoder is not None:
+        with torch.no_grad():
+            X = encoder(X).view(-1,16,28,28)
     # print(X.size(),source_u.size(),dest_u.size())
     X_pred = transformer(X,torch.cat([source_u.to(device),dest_u.to(device)],dim=1))
     # X_pred = transformer(X,U)
@@ -99,9 +126,12 @@ def train_classifier(X, source_u,dest_u, Y, classifier, transformer, classifier_
     return pred_loss
 
 
-def train_classifier_d(X, U, Y, classifier, classifier_optimizer,verbose=False):
+def train_classifier_d(X, U, Y, classifier, classifier_optimizer,verbose=False,encoder=None):
 
     classifier_optimizer.zero_grad()
+    if encoder is not None:
+        with torch.no_grad():
+            X = encoder(X).view(-1,16,28,28)
     Y_pred = classifier(X, U)
     pred_loss = classification_loss(Y_pred, Y).mean()
     # pred_loss = pred_loss.sum()
@@ -148,24 +178,20 @@ def show_images(images,fname,num=1):
             image[i*28:(i+1)*28,28*col:28*(col+1)] = real_img/real_img.max()
     Image.fromarray(image*255).convert("L").save(fname)
 
-EPOCH = 5
-CLASSIFIER_EPOCHS = 50   
-SUBEPOCH = 10
-BATCH_SIZE = 256
-DISC_BATCH_SIZE=64
-SHUFFLE_BUFFER_SIZE=4096
-IS_WASSERSTEIN = True
-NUM_TRAIN_DOMAIN = 6
-BIN_WIDTH = 15
-def train(num_indices, source_indices, target_indices):
+def train(num_indices, source_indices, target_indices,use_vgg=True):
 
     I_d = np.eye(num_indices)
 
 
-
-    transformer = Transformer(28**2 + 2*2, 256).to(device)
-    discriminator = Discriminator(28**2 + 2, 256,IS_WASSERSTEIN).to(device)
-    classifier = ClassifyNet(28**2 + 2,256,10).to(device)
+    if use_vgg:
+        # print(tv_models.vgg16(pretrained=True).features)
+        encoder = tv_models.vgg16(pretrained=True).features[:16].to(device)
+        encoder.eval()
+    else:
+        encoder = None
+    transformer = Transformer(28**2 + 2*2, 256, use_vgg=use_vgg).to(device)
+    discriminator = Discriminator(28**2 + 2, 256,IS_WASSERSTEIN, use_vgg=use_vgg).to(device)
+    classifier = ClassifyNet(28**2 + 2,256,10, use_vgg=use_vgg).to(device)
 
     transformer_optimizer   = torch.optim.Adagrad(transformer.parameters(),5e-2)
     classifier_optimizer    = torch.optim.Adagrad(classifier.parameters(),5e-3)
@@ -180,34 +206,55 @@ def train(num_indices, source_indices, target_indices):
     np.random.shuffle(mnist_ind)
     # mnist_ind = mnist_ind[:6000] #np.tile(mnist_ind[:1000],NUM_TRAIN_DOMAIN)   
     mnist_ind = np.tile(mnist_ind[:1000],NUM_TRAIN_DOMAIN)   
-    ot_data = [torch.utils.data.DataLoader(RotMNIST(indices=mnist_ind[(x-1)*1000:x*1000],bin_width=BIN_WIDTH,bin_index=x-1,n_bins=NUM_TRAIN_DOMAIN),1000,False) for x in source_indices]#len(source_indices))
-    mnist_data = RotMNIST(indices=mnist_ind,bin_width=BIN_WIDTH,bin_index=0,n_bins=6)
+    ot_data = [torch.utils.data.DataLoader(RotMNIST(indices=mnist_ind[(x-1)*1000:x*1000],bin_width=BIN_WIDTH,bin_index=x-1,n_bins=NUM_TRAIN_DOMAIN,vgg=use_vgg),1000,False) for x in source_indices]#len(source_indices))
+    mnist_data = RotMNIST(indices=mnist_ind,bin_width=BIN_WIDTH,bin_index=0,n_bins=6,vgg=use_vgg)
     for i in range(len(source_indices)):
-      for j in range(i,len(source_indices)):
-          if i!=j:
-              ot_sinkhorn = RegularizedSinkhornTransportOTDA(reg_e=0.5, alpha=10, max_iter=50, norm="max", verbose=False)
-              ot_sinkhorn.fit(Xs=next(iter(ot_data[i]))[0].view(1000,-1).detach().cpu().numpy()+1e-6, ys=next(iter(ot_data[i]))[2].view(1000,-1).detach().cpu().numpy(), Xt=next(iter(ot_data[j]))[0].view(1000,-1).detach().cpu().numpy()+1e-6, yt=next(iter(ot_data[j]))[2].view(1000,-1).detach().cpu().numpy(), iteration=0)
-              ot_maps[i][j] = ot_sinkhorn.transform(next(iter(ot_data[i]))[0].view(1000,-1).detach().cpu().numpy()+1e-6).reshape((1000,28,28))
-              show_images([next(iter(ot_data[i]))[0],next(iter(ot_data[j]))[0],ot_maps[i][j]],num=4,fname='{}-{}.png'.format(i,j))
-          else:
-              ot_maps[i][j] = next(iter(ot_data[i]))[0].view(1000,28,28).detach().cpu().numpy()
+        for j in range(i,len(source_indices)):
+            if i!=j:
+                ot_sinkhorn = RegularizedSinkhornTransportOTDA(reg_e=0.5, alpha=10, max_iter=50, norm="max", verbose=False)
+                if use_vgg:
+                    Xs = encoder(next(iter(ot_data[i]))[0]).view(1000,-1).detach().cpu().numpy()+1e-6
+                    ys = next(iter(ot_data[i]))[2].view(1000,-1).detach().cpu().numpy()
+                    Xt = encoder(next(iter(ot_data[j]))[0]).view(1000,-1).detach().cpu().numpy()+1e-6
+                    yt = next(iter(ot_data[j]))[2].view(1000,-1).detach().cpu().numpy()
+                    out_shape = (1000,16,28,28)
+                else:
+                    Xs = next(iter(ot_data[i]))[0].view(1000,-1).detach().cpu().numpy()+1e-6
+                    ys = next(iter(ot_data[i]))[2].view(1000,-1).detach().cpu().numpy()
+                    Xt = next(iter(ot_data[j]))[0].view(1000,-1).detach().cpu().numpy()+1e-6
+                    yt = next(iter(ot_data[j]))[2].view(1000,-1).detach().cpu().numpy() 
+                    out_shape = (1000,28,28)
+
+                ot_sinkhorn.fit(Xs=Xs, ys=ys, Xt=Xt, yt=yt, iteration=0)
+                ot_maps[i][j] = ot_sinkhorn.transform(Xs).reshape(out_shape)
+              # show_images([next(iter(ot_data[i]))[0],next(iter(ot_data[j]))[0],ot_maps[i][j]],num=4,fname='{}-{}.png'.format(i,j))
+            else:
+                if use_vgg:
+                    out_shape = (1000,16,28,28)
+                    Xs = encoder(next(iter(ot_data[i]))[0])#.view(out_shape).detach().cpu().numpy()
+                    # print(Xs.size())
+                    # assert False
+                else:
+                    out_shape = (1000,28,28)
+                    Xs = next(iter(ot_data[i]))[0].view(out_shape).detach().cpu().numpy()
+                ot_maps[i][j] = Xs
     
     # print(ot_maps)
     print("-------------TRAINING CLASSIFIER----------")
-    # class_step = 0
+    class_step = 0
 
-    # for epoch in range(CLASSIFIER_EPOCHS):
-    #     past_dataset = torch.utils.data.DataLoader((mnist_data),BATCH_SIZE,True)
-    #     class_loss = 0
-    #     for batch_X, batch_U, batch_Y in tqdm(past_dataset):
+    for epoch in range(CLASSIFIER_EPOCHS):
+        past_dataset = torch.utils.data.DataLoader((mnist_data),BATCH_SIZE,True)
+        class_loss = 0
+        for batch_X, batch_U, batch_Y in tqdm(past_dataset):
 
-    #         # batch_X = torch.cat([batch_X,batch_U.view(-1,2)],dim=1)
+            # batch_X = torch.cat([batch_X,batch_U.view(-1,2)],dim=1)
 
-    #         l = train_classifier_d(batch_X,batch_U,batch_Y,classifier,classifier_optimizer,verbose=False)
-    #         class_step += 1
-    #         class_loss += l
-    #     print("Epoch %d Loss %f"%(epoch,class_loss),flush=False)
-    classifier.load_state_dict(torch.load("classifier.pth"))
+            l = train_classifier_d(batch_X,batch_U,batch_Y,classifier,classifier_optimizer,verbose=False,encoder=encoder)
+            class_step += 1
+            class_loss += l
+        print("Epoch %d Loss %f"%(epoch,class_loss),flush=False)
+    # classifier.load_state_dict(torch.load("classifier.pth"))
     all_steps_t = 0
     all_steps_d = 0
     for index in range(1, len(source_indices)):
@@ -215,7 +262,7 @@ def train(num_indices, source_indices, target_indices):
         print('Domain %d' %index)
         print('----------------------------------------------------------------------------------------------')
 
-        past_data = (RotMNIST(indices=mnist_ind[:source_indices[index-1]*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=source_indices[0]-1,n_bins=6)) #,BATCH_SIZE,True)
+        past_data = (RotMNIST(indices=mnist_ind[:source_indices[index-1]*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=source_indices[0]-1,n_bins=6,vgg=use_vgg)) #,BATCH_SIZE,True)
         # present_dataset = torch.utils.data.Dataloader(torch.utils.data.TensorDataset(X_source[index], U_source[index], 
         #                   Y_source[index]),BATCH_SIZE,True,repeat(
         #                   math.ceil(X_past.shape[0]/X_source[index].shape[0])))
@@ -226,12 +273,12 @@ def train(num_indices, source_indices, target_indices):
         # Y_past = np.vstack([Y_past, Y_source[index]])
         # U_past = np.hstack([U_past, U_source[index]])
         
-        p = RotMNIST(indices=mnist_ind[:source_indices[(index-1)]*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=source_indices[0]-1,n_bins=6,transported_samples=ot_maps,target_bin=source_indices[index]-1)
+        p = RotMNIST(indices=mnist_ind[:source_indices[(index-1)]*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=source_indices[0]-1,n_bins=6,transported_samples=ot_maps,target_bin=source_indices[index]-1,vgg=use_vgg,verbose=True)
 
-        print(len(p))  # TODO
+        # print(len(p), p.vgg)  # TODO
         all_data = torch.utils.data.DataLoader(p,
                     BATCH_SIZE,True)            # for batch_X, batch_U, batch_Y, batch_transported in all_dataset:
-        curr_data = torch.utils.data.DataLoader(RotMNIST(indices=mnist_ind[source_indices[index-1]*(6000//NUM_TRAIN_DOMAIN):source_indices[(index)]*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=source_indices[index-1]-1,n_bins=6),BATCH_SIZE,True,drop_last=True)
+        curr_data = torch.utils.data.DataLoader(RotMNIST(indices=mnist_ind[source_indices[index-1]*(6000//NUM_TRAIN_DOMAIN):source_indices[(index)]*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=source_indices[index-1]-1,n_bins=6,vgg=use_vgg),BATCH_SIZE,True,drop_last=True)
         num_all_batches  = len(p) // BATCH_SIZE
         step_c = 0
 
@@ -264,9 +311,9 @@ def train(num_indices, source_indices, target_indices):
                       curr_dataset = iter(curr_data)
                       real_X,real_U,_ = next(curr_dataset)
                   if IS_WASSERSTEIN:
-                      loss_d = train_discriminator_batch_wasserstein(batch_X, batch_U,this_U,real_X, transformer, discriminator, discriminator_optimizer) #train_discriminator_batch(batch_X, real_X)
+                      loss_d = train_discriminator_batch_wasserstein(batch_X, batch_U,this_U,real_X, transformer, discriminator, discriminator_optimizer,encoder=encoder) #train_discriminator_batch(batch_X, real_X)
                   else:
-                      loss_d = train_discriminator_batch(batch_X, batch_U,this_U,real_X, transformer, discriminator, discriminator_optimizer)
+                      loss_d = train_discriminator_batch(batch_X, batch_U,this_U,real_X, transformer, discriminator, discriminator_optimizer,encoder=encoder)
                   loss2 += loss_d
                   writer.add_scalar('Loss/disc',loss_d.detach().cpu().numpy(),step_d+all_steps_d)
                   step_d += 1
@@ -284,7 +331,7 @@ def train(num_indices, source_indices, target_indices):
                     # print(batch_X.size(),batch_U.size(),this_U.size(),batch_transported.size())
                     loss_t,ltd,lr,lc = train_transformer_batch(batch_X,batch_Y,batch_transported,batch_U,this_U,
                                     transformer,discriminator,classifier,
-                                    transformer_optimizer,is_wasserstein=IS_WASSERSTEIN) #train_transformer_batch(batch_X)
+                                    transformer_optimizer,is_wasserstein=IS_WASSERSTEIN,encoder=encoder) #train_transformer_batch(batch_X)
                     loss1 += loss_t
                     writer.add_scalar('Loss/transformer',loss_t.detach().cpu().numpy(),step_t+all_steps_t)
                     writer.add_scalar('Loss/transformer_disc',ltd.detach().cpu().numpy(),step_t+all_steps_t)
@@ -310,12 +357,12 @@ def train(num_indices, source_indices, target_indices):
     for i in range(len(target_indices)):
         print(U_target[i])
 
-        source_dataset = torch.utils.data.DataLoader(RotMNIST(indices=mnist_ind[:source_indices[-1]*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=0,n_bins=6),BATCH_SIZE,True)
+        source_dataset = torch.utils.data.DataLoader(RotMNIST(indices=mnist_ind[:source_indices[-1]*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=0,n_bins=6,vgg=use_vgg),BATCH_SIZE,True)
 
 
 
         step = 0
-        for epoch in range(CLASSIFIER_EPOCHS):
+        for epoch in range(CLASSIFIER_EPOCHS//2):
 
           loss = 0
             
@@ -328,7 +375,7 @@ def train(num_indices, source_indices, target_indices):
               this_U = torch.tensor(this_U).float().view(-1,2).to(device)
               # batch_X = torch.cat([batch_X, batch_U, this_U], dim=1)
               step += 1
-              loss += train_classifier(batch_X,batch_U,this_U, batch_Y, classifier,transformer, classifier_optimizer)
+              loss += train_classifier(batch_X,batch_U,this_U, batch_Y, classifier,transformer, classifier_optimizer,encoder=encoder)
 
           print('Epoch: %d - ClassificationLoss: %f' % (epoch, loss))
 
@@ -336,15 +383,15 @@ def train(num_indices, source_indices, target_indices):
         #print(classifier.trainable_variables)
         index = target_indices[i]
         print(index)
-        td = RotMNIST(indices=mnist_ind[(index-1)*(6000//NUM_TRAIN_DOMAIN):(index)*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=index-1,n_bins=6)
+        td = RotMNIST(indices=mnist_ind[(index-1)*(6000//NUM_TRAIN_DOMAIN):(index)*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=index-1,n_bins=6,vgg=use_vgg)
         print(len(mnist_ind[(index-1)*(6000//NUM_TRAIN_DOMAIN):(index)*(6000//NUM_TRAIN_DOMAIN)]))
         target_dataset = torch.utils.data.DataLoader(td,BATCH_SIZE,False,drop_last=True)
         Y_pred = []
         Y_label = []
         for batch_X, batch_U, batch_Y in tqdm(target_dataset):
-
-
             batch_U = batch_U.view(-1,2)
+            if encoder is not None:
+                batch_X = encoder(batch_X).view(-1,16,28,28)
             batch_Y_pred = classifier(batch_X, batch_U).detach().cpu().numpy()
             Y_pred = Y_pred + [np.argmax(batch_Y_pred,axis=1)]
             Y_label = Y_label + [batch_Y.detach().cpu().numpy()]
@@ -358,74 +405,14 @@ def train(num_indices, source_indices, target_indices):
         print(classification_report(Y_label, Y_pred))    
     return transformer,discriminator,classifier
 
-
-
-def train_baselines(X_data,Y_data,U_data,num_indices, source_indices, target_indices):
-    I_d = np.eye(num_indices)
-
-    X_source = X_data[source_indices]
-    Y_source = Y_data[source_indices]
-    U_source = U_data[source_indices]
-
-    X_target = X_data[target_indices]
-    Y_target = Y_data[target_indices]
-    U_target = U_data[target_indices]
-
-    classifier = ClassifyNet(3,3,2)
-
-    classifier_optimizer    = torch.optim.Adagrad(classifier.parameters(),5e-2)
-
-    writer = SummaryWriter(comment='{}'.format(time.time()))
-
-    ## BASELINE 1- Sequential training with no adaptation ##
-    for i in source_indices:
-        X_past = X_source[0]
-        U_past = U_source[0]
-        Y_past = Y_source[0]
-        
-        past_data = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(X_past).float(),
-                                                        torch.tensor(U_past).float(), torch.tensor(Y_past).float()),BATCH_SIZE,True)
-        for epoch in range(EPOCH):
-            loss = 0
-            for batch_X,batch_U,batch_Y in past_data:
-                batch_U = batch_U.view(-1,1)
-                batch_X = torch.cat([batch_X, batch_U], dim=1)
-                # step += 1
-                loss += train_classifier_d(batch_X, batch_Y, classifier, classifier_optimizer, verbose=False)
-            print('Epoch %d - %f' % (epoch, loss.detach().cpu().numpy()))
-
-    print("___________TESTING____________")
-    for i in range(len(X_target)):
-        print(U_target[i])
-        target_dataset = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(X_target[i]).float(), torch.tensor(U_target[i]).float(), torch.tensor(Y_target[i]).float()),BATCH_SIZE,False)
-        Y_pred = []
-        for batch_X, batch_U, batch_Y in target_dataset:
-
-            batch_U = batch_U.view(-1,1)
-            batch_X = torch.cat([batch_X, batch_U], dim=1)
-            batch_Y_pred = classifier(batch_X).detach().cpu().numpy()
-
-            Y_pred = Y_pred + [batch_Y_pred]  
-        Y_pred = np.vstack(Y_pred)
-        print('shape: ',Y_pred.shape)
-        # print(Y_pred)
-        Y_pred = np.array([0 if y[0] > y[1] else 1 for y in Y_pred])
-        Y_true = np.array([0 if y[0] > y[1] else 1 for y in Y_target[i]])
-
-        # print(Y_pred-Y_true)
-        print(accuracy_score(Y_true, Y_pred))
-        print(confusion_matrix(Y_true, Y_pred))
-        print(classification_report(Y_true, Y_pred))    
-    return trans,disc,classifier
- 
-def train_cross_grad(src_indices,target_indices,num_bins=6,steps=50):
+def train_cross_grad(src_indices,target_indices,num_bins=6,steps=75):
     model_enc = tv_models.vgg16(pretrained=True).features[:5]
     model_enc.eval()
-    model_gn  = GradNet(12,6)
+    model_gn  = GradNet(12,6,use_vgg=True)
     model_enc.to(device)
     model_gn.to(device)
     optimizer_enc = torch.optim.Adagrad(model_enc.parameters(),5e-3)
-    optimizer_gn = torch.optim.Adagrad(model_gn.parameters(),5e-3)
+    optimizer_gn = torch.optim.Adagrad(model_gn.parameters(),5e-2)
     mnist_ind = (np.arange(NUM_TRAIN_DOMAIN*10000))
     np.random.shuffle(mnist_ind)
     mnist_ind = mnist_ind[:6000] #np.tile(mnist_ind[:1000],NUM_TRAIN_DOMAIN)   
@@ -438,25 +425,27 @@ def train_cross_grad(src_indices,target_indices,num_bins=6,steps=50):
             for img_1,img_2,time_diff in data:
                 # optimizer_enc.zero_grad()
                 optimizer_gn.zero_grad()
-                i1 = model_enc(img_1)
-                i2 = model_enc(img_2)
+                i1 = model_enc(img_1).view(-1,16,28,28)
+                i2 = model_enc(img_2).view(-1,16,28,28)
                 time_diff_pred = model_gn(i1,i2)
-                loss = ((time_diff - time_diff_pred)**2).sum()
+                # print(time_diff.size(),time_diff_pred.size())
+                loss = ((time_diff.view(-1,1) - time_diff_pred.view(-1,1))**2).sum()
                 loss.backward()
                 # optimizer_enc.step()
                 optimizer_gn.step()
                 print('Epoch %d - %f' % (epoch, loss.detach().cpu().numpy()),flush=True,end='\r')
     print("")
-    past_data = torch.utils.data.DataLoader(RotMNIST(indices=mnist_ind[:source_indices[idx]*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=src_indices[0]-1,n_bins=6,vgg=True),BATCH_SIZE,1) 
+    past_data = torch.utils.data.DataLoader(RotMNIST(indices=mnist_ind[:source_indices[idx]*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=src_indices[0]-1,n_bins=6,vgg=True),BATCH_SIZE,False,drop_last=True) 
     time = (60/75)
-    new_data = []
+    new_images = []
+    new_labels = []
     for img,u,label in past_data:
         # new_img = torch.zeros_like(img).normal_(0.,1.)
         new_img = img.clone().detach()
         new_img.requires_grad = True
         optim = torch.optim.SGD([new_img],lr=1e-3)
-        i1 = model_enc(img)
-        i2 = model_enc(new_img)
+        i1 = model_enc(img).view(-1,16,28,28)
+        i2 = model_enc(new_img).view(-1,16,28,28)
         for s in range(steps):
             # optim.zero_grad()
             # print(model(img,new_img).size(),(u[:,1]-time).size())
@@ -466,18 +455,83 @@ def train_cross_grad(src_indices,target_indices,num_bins=6,steps=50):
             print('Step %d - %f' % (s, loss.detach().cpu().numpy()),flush=True,end='\r')
             with torch.no_grad():
                 # print(grad)/
-                i2 = i2 - 1e-2*grad[0].data
+                i2 = i2 - 1e-1*grad[0].data
                 i2 = i2.detach().clone()
                 i2.requires_grad = True
                 # new_img.grad.zero_()
             # optim.step()
-        new_data.append(i2.detach().cpu().numpy())
-        # print((new_img-img).max())
-        # show_images([new_img,img, (new_img-img)],'cross.png',10)
-    return np.concatenate(new_data,axis=0)      
+        new_images.append(new_img.detach().cpu().numpy())
+        new_labels.append(label.view(-1,1).detach().cpu().numpy())
+    # print([x.size() for x in new_labels])
+    new_ds_x, new_ds_y = np.vstack(new_images), np.vstack(new_labels)
+    new_ds_u = np.hstack([np.array([time]*len(new_ds_x)).reshape(-1,1),np.array([5/6]*len(new_ds_x)).reshape(-1,1)])
+    print(new_ds_x.shape,new_ds_u.shape,new_ds_y.shape)
+
+
+    # Using augmented data to classify. Can also use augmented data for pre-training only
+    classifier = ClassifyNet(3,3,10,use_vgg=True).to(device)
+
+    classifier_optimizer    = torch.optim.Adagrad(classifier.parameters(),5e-3)
+    class_data = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(new_ds_x).float().to(device),torch.tensor(new_ds_u).float().to(device),
+     torch.tensor(new_ds_y).long().to(device)),BATCH_SIZE,False)
+    classifier.train()
+    mnist_data = RotMNIST(indices=mnist_ind,bin_width=BIN_WIDTH,bin_index=0,n_bins=6,vgg=True)
+
+    for epoch in range(CLASSIFIER_EPOCHS):
+        past_dataset = torch.utils.data.DataLoader((mnist_data),BATCH_SIZE,True)
+        class_loss = 0
+        for batch_X, batch_U, batch_Y in tqdm(past_dataset):
+
+            # batch_X = torch.cat([batch_X,batch_U.view(-1,2)],dim=1)
+            batch_X = model_enc(batch_X).view(-1,16,28,28)
+
+            l = train_classifier_d(batch_X,batch_U,batch_Y,classifier,classifier_optimizer,verbose=False)
+            # class_step += 1
+            class_loss += l
+        print("Epoch %d Loss %f"%(epoch,class_loss),flush=False)
+
+    for epoch in range(CLASSIFIER_EPOCHS):
+        for X,U,Y in class_data:
+            X = model_enc(X).view(-1,16,28,28)
+            l = train_classifier_d(X, U, Y, classifier, classifier_optimizer,verbose=False)
+            print('Epoch %d - %f' % (epoch, l.detach().cpu().numpy()),flush=True)
+
+    index = target_indices[0]
+    td = RotMNIST(indices=mnist_ind[(index-1)*(6000//NUM_TRAIN_DOMAIN):(index)*(6000//NUM_TRAIN_DOMAIN)],bin_width=BIN_WIDTH,bin_index=index-1,n_bins=6,vgg=True)
+    print(len(mnist_ind[(index-1)*(6000//NUM_TRAIN_DOMAIN):(index)*(6000//NUM_TRAIN_DOMAIN)]))
+    target_dataset = torch.utils.data.DataLoader(td,BATCH_SIZE,False,drop_last=True)
+    Y_pred = []
+    Y_label = []
+    for batch_X, batch_U, batch_Y in tqdm(target_dataset):
+        batch_U = batch_U.view(-1,2)
+        # if encoder is not None:
+        batch_X = model_enc(batch_X).view(-1,16,28,28)
+        batch_Y_pred = classifier(batch_X, batch_U).detach().cpu().numpy()
+        Y_pred = Y_pred + [np.argmax(batch_Y_pred,axis=1)]
+        Y_label = Y_label + [batch_Y.detach().cpu().numpy()]
+    print(len(Y_pred),len(Y_label))
+    # print(Y_pred[0].shape,Y_label[0].shape)
+    Y_pred = np.hstack(Y_pred)
+    Y_label = np.hstack(Y_label)
+    print('shape: ',Y_pred.shape)
+    print(accuracy_score(Y_label, Y_pred))
+    print(confusion_matrix(Y_label, Y_pred))
+    print(classification_report(Y_label, Y_pred))    
+
+
+    return classifier
 if __name__ == "__main__":
     # X_data, Y_data, U_data = load_moons(11)
-
+    parser = argparse.ArgumentParser()
+    """ Arguments: arg """
+    parser.add_argument('--algo')
+    
+    args = parser.parse_args()
+    
+    
     # train_baselines(X_data, Y_data, U_data, 11, [7,8], [9,10])
-    train_cross_grad([1,2,3,4],[5],6)
+    if args.algo == "cg":
+        train_cross_grad([1,2,3,4],[5],6)
+    else:
+        train(6,[1,2,3,4],[5])
     # torch.save({"trans":t.state_dict(),"disc":d.state_dict(),"classifier":c.state_dict()},"./model.pth")
