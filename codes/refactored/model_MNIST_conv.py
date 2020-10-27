@@ -7,50 +7,124 @@
 ##        3. U-NET type structure?
 from torch import nn
 import torch
+import torchvision as tv
 device = "cuda:0"
 
+class Encoder(nn.Module):
+	"""docstring for Encoder"""
+	'''Deprecated class for Encoder module
+	
+	We now use VGG for encoding. Also try an end-2-end encoder
+	'''
+	def __init__(self):
+		super(Encoder, self).__init__()
+		self.model = tv_models.vgg16(pretrained=True).features[:16]
+	def forward(self,X):
+		X = self.model(X).view(-1,16,28,28)
+		return X
+
+
+class GradNet(nn.Module):
+	def __init__(self,data_shape, hidden_shape, time_conditioning=True,leaky=False,use_vgg=False):
+		super(GradNet,self).__init__()
+
+		if use_vgg:
+			in_channels = 16
+		else:
+			in_channels = 1
+
+		# self.time_encodings = TimeEncodings(data_shape,1)
+		self.layer_0 = nn.Conv2d(in_channels=in_channels,out_channels=32,kernel_size=3)
+		self.relu_0    = nn.LeakyReLU()
+		# self.relu_0 = nn.ReLU()
+		# if time_conditioning:
+		self.layer_1 = nn.Conv2d(in_channels=32,out_channels=64,kernel_size=3)
+		self.layer_2 = nn.Conv2d(in_channels=64,out_channels=64,kernel_size=3)
+			# self.layer_2 = nn.Linear(hidden_shape,hidden_shape)
+			# self.relu_t = nn.LeakyReLU()
+		self.relu_t = nn.ReLU()
+		self.down_sampling = nn.MaxPool2d(kernel_size=2, stride=2)
+		self.out_layer = nn.Linear(3200,1)
+		self.out_relu = nn.LeakyReLU()
+
+	def forward(self,X1,X2):
+		# times = X[:,-1:]
+		# X = self.time_encodings(X)
+		# print(X1.size())
+		if len(X1.size()) < 4:
+			X1 = X1.unsqueeze(1)
+		if len(X2.size()) < 4:
+			X2 = X2.unsqueeze(1)
+		X1  = self.layer_0(X1)
+		X1  = self.relu_0(X1)
+
+		# if self.time_conditioning:
+		X1 = self.layer_1(X1)
+		X1 = self.relu_t(X1)
+		X1 = self.down_sampling(X1)
+		X1 = self.layer_2(X1)
+		X1 = self.relu_t(X1)
+
+		X1 = self.down_sampling(X1)
+		# X1 = self.layer_2(X1)
+		# X1 = self.relu_t(X1)
+
+		X2  = self.layer_0(X2)
+		X2  = self.relu_0(X2)
+
+		# if self.time_conditioning:
+		X2 = self.layer_1(X2)
+		X2 = self.relu_t(X2)
+		X2 = self.down_sampling(X2)
+		X2 = self.layer_2(X2)
+		X2 = self.relu_t(X2)
+		X2 = self.down_sampling(X2)
+		# X2 = self.layer_2(X2)
+		# X2 = self.relu_t(X2)
+		# print(X1.size())
+		X = self.out_layer(torch.cat([X1.view(X1.size(0),-1),X2.view(X1.size(0),-1)],dim=-1))
+		# X = self.out_relu(X)
+		# X = torch.softmax(X,dim=1)
+
+		return X
+		
+		
 class ClassifyNet(nn.Module):
-	# Model adapted from https://github.com/hehaodele/CIDA/blob/master/rotatingMNIST/model.py#L176
-	def __init__(self,data_shape, hidden_shape=256, n_classes=10, append_time=False,encode_time=True,time_conditioning=True,leaky=True):
+	def __init__(self,data_shape, hidden_shape, n_classes, append_time=False,encode_time=False,time_conditioning=True,leaky=True,use_vgg=False):
 		super(ClassifyNet,self).__init__()
 
 		self.time_conditioning = time_conditioning
 		self.append_time = append_time
 		self.encode_time = encode_time
-		nh = hidden_shape
-		nz = 1
-
-		if self.append_time:
-			in_channels = 3
+		if use_vgg:
+			in_channels = 16
 		else:
 			in_channels = 1
+
+		if self.append_time:
+			in_channels += 2
+		else:
+			in_channels += 0
 		if self.encode_time:
 			self.time_enc = TimeEncodings(784,2)
 
 		self.flat = nn.Flatten()
-		self.conv1 = ConvBlock(in_channels=in_channels, out_channels=nh,kernel_size=3,stride=2,  padding=1,time_relu_size=196*nh,time_shape=2,dropout=0.5,leaky_relu=True)
-		self.conv2 = ConvBlock(in_channels=nh, out_channels=nh,kernel_size=3,stride=2,  padding=1,time_relu_size=49*nh,time_shape=2,dropout=0.5,leaky_relu=True)
-		self.conv3 = ConvBlock(in_channels=nh, out_channels=nh,kernel_size=3,stride=2,  padding=1,time_relu_size=16*nh,time_shape=2,dropout=0.5,leaky_relu=True)
-		self.conv4 = ConvBlock(in_channels=nh, out_channels=nz,kernel_size=4,stride=1,  padding=0,time_relu_size=1*nz,time_shape=2,dropout=0.5,leaky_relu=True)
-		# self.conv = nn.Sequential(
-	 #            nn.Conv2d(1, nh, 3, 2, 1), nn.BatchNorm2d(nh), TimeReLU(True), nn.Dropout(opt.dropout),  # 14 x 14
-	 #            nn.Conv2d(nh, nh, 3, 2, 1), nn.BatchNorm2d(nh), nn.ReLU(True), nn.Dropout(opt.dropout),  # 7 x 7
-	 #            nn.Conv2d(nh, nh, 3, 2, 1), nn.BatchNorm2d(nh), nn.ReLU(True), nn.Dropout(opt.dropout),  # 4 x 4
-	 #            nn.Conv2d(nh, nz, 4, 1, 0), nn.ReLU(True),  # 1 x 1
-	 #        )
-	     # self.fc_pred = nn.Sequential(
-        #     nn.Conv2d(nz, nh, 1, 1, 0), nn.BatchNorm2d(nh), nn.ReLU(True),
-        #     nn.Conv2d(nh, nh, 1, 1, 0), nn.BatchNorm2d(nh), nn.ReLU(True),
-        #     nnSqueeze(),
-        #     nn.Linear(nh, 10),
-        # )
-
+		self.layer_0 = nn.Conv2d(in_channels=in_channels, out_channels=8, kernel_size=3)
+		self.relu_0    = TimeReLU(13*13*8,1,leaky)
+		# self.relu_0 = nn.ReLU()
+		if time_conditioning:
+			self.layer_1 = nn.Conv2d(in_channels=8, out_channels=16, kernel_size=3)
+			self.layer_2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3)
+			self.relu_1 = TimeReLU(200*2,1,leaky)
+			self.relu_2 = TimeReLU(72*4,1,leaky)
+			# self.relu_t = nn.ReLU()
 		self.down_sampling = nn.MaxPool2d(kernel_size=2, stride=2)
-		self.out_layer = nn.Linear(nz,n_classes)
-		self.out_relu = TimeReLU(n_classes,2,leaky)
+		self.out_layer = nn.Linear(72*4,n_classes)
+		self.out_relu = TimeReLU(n_classes,1,leaky)
 
 	def forward(self,X,times):
-		X = X.unsqueeze(1)
+		if len(X.size()) < 4:
+			X = X.unsqueeze(1)
 		
 		if self.encode_time:
 			X = self.time_enc(X,times)
@@ -59,11 +133,19 @@ class ClassifyNet(nn.Module):
 			times_ = times.unsqueeze(1).unsqueeze(2).repeat(1,1,28,28)
 			X = torch.cat([X,times],dim=1)
 
-		X  = self.conv1(X,times)
-		X  = self.conv2(X,times)
-		X  = self.conv3(X,times)
-		X  = self.conv4(X,times)
+		X  = self.layer_0(X)
+		X  = self.down_sampling(X)
+		X  = self.relu_0(X,times)
 
+
+		if self.time_conditioning:
+			X = self.layer_1(X)
+			X = self.down_sampling(X)
+			X = self.relu_1(X,times)
+			X = self.layer_2(X)
+			X = self.relu_2(X,times)
+
+		# print(X.size())
 		X = self.out_layer(X.view(X.size(0),-1))
 		X = self.out_relu(X,times)
 		X = torch.softmax(X,dim=1)
@@ -72,7 +154,7 @@ class ClassifyNet(nn.Module):
 
 
 class Transformer(nn.Module):
-	def __init__(self,data_shape, latent_shape,append_time=False,encode_time=True, label_dim=0):
+	def __init__(self,data_shape, latent_shape,append_time=False,encode_time=False, label_dim=0,use_vgg=False):
 		'''
 		Notes to self - 
 			1. This should transform both X and Y
@@ -92,20 +174,23 @@ class Transformer(nn.Module):
 		super(Transformer,self).__init__()
 		self.append_time = append_time
 		self.encode_time = encode_time
-
-		if self.append_time:
-			in_channels = 5
+		if use_vgg:
+			in_channels_base = 16
 		else:
-			in_channels = 1
+			in_channels_base = 1
+		if self.append_time:
+			in_channels = in_channels_base + 4
+		else:
+			in_channels = in_channels_base +  0
 		if self.encode_time:
 			self.time_enc = TimeEncodings(784,2)
 		self.flat = nn.Flatten()
-		self.layer_0 = ConvBlock(in_channels=in_channels,out_channels=8,kernel_size=3,time_relu_size=6272,time_shape=4)
-		self.layer_1 = ConvBlock(in_channels=8,out_channels=8,kernel_size=3,time_relu_size=3136//2,time_shape=4)
-		self.layer_2 = ConvBlock(in_channels=8,out_channels=16,kernel_size=3,time_relu_size=784,time_shape=4)
-		self.layer_3 = ConvBlock(in_channels=16,out_channels=8,kernel_size=3,time_relu_size=392,time_shape=4)
-		self.layer_4 = ConvBlock(in_channels=8,out_channels=8,kernel_size=3,time_relu_size=1568,time_shape=4)
-		self.layer_5 = ConvBlock(in_channels=8,out_channels=1,kernel_size=3,time_relu_size=784,time_shape=4)
+		self.layer_0 = ConvBlock(in_channels=in_channels,out_channels=8*8,kernel_size=3,time_relu_size=6272*8,time_shape=2)
+		self.layer_1 = ConvBlock(in_channels=8*8,out_channels=8*8,kernel_size=3,time_relu_size=3136*4,time_shape=2)
+		self.layer_2 = ConvBlock(in_channels=8*8,out_channels=16*8,kernel_size=3,time_relu_size=784*8,time_shape=2)
+		self.layer_3 = ConvBlock(in_channels=16*8,out_channels=8*8,kernel_size=3,time_relu_size=392*8,time_shape=2)
+		self.layer_4 = ConvBlock(in_channels=8*8,out_channels=8*8,kernel_size=3,time_relu_size=1568*8,time_shape=2)
+		self.layer_5 = ConvBlock(in_channels=8*8,out_channels=in_channels_base,kernel_size=3,time_relu_size=784*in_channels_base,time_shape=2)
 		self.down_sampling = nn.MaxPool2d(kernel_size=2, stride=2, return_indices=True)
 		self.up_sampling = nn.MaxUnpool2d(kernel_size=2, stride=2)
 		# self.layer_0_2 = nn.Linear(latent_shape,latent_shape)
@@ -115,8 +200,9 @@ class Transformer(nn.Module):
 	def forward(self,X,times):
 		# times = X[:,-4:]
 		# X = torch.cat([self.flat(X),times.view(-1,4)],dim=-1)
-		X = X.unsqueeze(1)
-		
+		if len(X.size()) < 4:
+			X = X.unsqueeze(1)
+
 		if self.encode_time:
 			X = self.time_enc(X,times)
 
@@ -152,7 +238,7 @@ class Transformer(nn.Module):
 
 
 class Discriminator(nn.Module):
-	def __init__(self,data_shape, hidden_shape=512, is_wasserstein=False,time_conditioning=True,append_time=False,encode_time=True,leaky=False):
+	def __init__(self,data_shape, hidden_shape, is_wasserstein=False,time_conditioning=True,append_time=False,encode_time=False,leaky=False,use_vgg=False):
 
 		super(Discriminator,self).__init__()
 		self.flat = nn.Flatten()
@@ -163,41 +249,36 @@ class Discriminator(nn.Module):
 		self.time_conditioning = time_conditioning
 		self.append_time = append_time
 		self.encode_time = encode_time
-		nh = hidden_shape
-		if self.append_time:
-			in_channels = 3
+
+		if use_vgg:
+			in_channels = 16
 		else:
 			in_channels = 1
+		if self.append_time:
+			in_channels += 2
+		else:
+			in_channels += 0
 		if self.encode_time:
 			self.time_enc = TimeEncodings(784,2)
 
-		# self.conv1 = ConvBlock(in_channels=in_channels, out_channels=nh,kernel_size=2,stride=2,  padding=0,time_relu_size=26*26*nh,time_shape=2,dropout=0.0,leaky_relu=True)
-		# self.conv2 = ConvBlock(in_channels=nh, out_channels=nh,kernel_size=1,stride=1,  padding=0,time_relu_size=24*24*nh,time_shape=2,dropout=0.0,leaky_relu=True)
-		# self.conv3 = ConvBlock(in_channels=in_channels, out_channels=nh,kernel_size=1,stride=1,  padding=0,time_relu_size=22*22*nh,time_shape=2,dropout=0.0,leaky_relu=True)
-        # self.net = nn.Sequential(
-        #     nn.Conv2d(nin, nh, 1, 1, 0), nn.BatchNorm2d(nh), nn.LeakyReLU(),
-        #     nn.Conv2d(nh, nh, 1, 1, 0), nn.BatchNorm2d(nh), nn.LeakyReLU(),
-        #     nn.Conv2d(nh, nh, 1, 1, 0), nn.BatchNorm2d(nh), nn.LeakyReLU(),
-        #     nnSqueeze(),
-        #     nn.Linear(nh, nout),
-        # )
 		self.flat = nn.Flatten()
-		self.layer_0 = nn.Conv2d(in_channels=in_channels, out_channels=64, kernel_size=3)
-		self.relu_0    = TimeReLU(8*1352*in_channels,2,leaky)
+		self.layer_0 = nn.Conv2d(in_channels=in_channels, out_channels=8, kernel_size=3)
+		self.relu_0    = TimeReLU(1352*1,1,leaky)
 		# self.relu_0 = nn.ReLU()
 		if time_conditioning:
-			self.layer_1 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3)
-			self.layer_2 = nn.Conv2d(in_channels=64, out_channels=64, kernel_size=3)
-			self.relu_1 = TimeReLU(200*8,2,leaky)
-			self.relu_2 = TimeReLU(72*8,2,leaky)
+			self.layer_1 = nn.Conv2d(in_channels=8, out_channels=8, kernel_size=3)
+			self.layer_2 = nn.Conv2d(in_channels=8, out_channels=8, kernel_size=3)
+			self.relu_1 = TimeReLU(200,1,leaky)
+			self.relu_2 = TimeReLU(72,1,leaky)
 			# self.relu_t = nn.ReLU()
 		self.down_sampling = nn.MaxPool2d(kernel_size=2, stride=2)
-		self.out_layer = nn.Linear(72*8,1)
+		self.out_layer = nn.Linear(72,1)
 		# self.out_relu = TimeReLU(1,2,leaky)
 
 	def forward(self,X,times):
-		X = X.unsqueeze(1)
-		
+		if len(X.size()) < 4:
+			X = X.unsqueeze(1)
+
 		if self.encode_time:
 			X = self.time_enc(X,times)
 
@@ -227,25 +308,19 @@ class Discriminator(nn.Module):
 
 
 class TimeReLU(nn.Module):
-	def __init__(self,data_shape,time_shape,leaky=False,time2vec=True,time2vec_hidden_shape=8):
+	def __init__(self,data_shape,time_shape,leaky=False):
 		super(TimeReLU,self).__init__()
-		if time2vec:
-			self.time_emb = Time2Vec(time_shape,time2vec_hidden_shape)
-			time_shape = time2vec_hidden_shape
 		self.model = nn.Linear(time_shape,data_shape)
 		if leaky:
 			self.model_alpha = nn.Linear(time_shape,data_shape)
 		self.leaky = leaky
 		self.time_dim = time_shape
-		self.time2vec = time2vec
 	
 	def forward(self,X,times):
 		# times = X[:,-self.time_dim:]
 		orig_shape = X.size()
 		# print(orig_shape)
 		X = X.view(orig_shape[0],-1)
-		if self.time2vec:
-			times = self.time_emb(times)
 		thresholds = self.model(times)
 		if self.leaky:
 			alphas = self.model_alpha(times)
@@ -255,28 +330,6 @@ class TimeReLU(nn.Module):
 		X = torch.where(X>thresholds,X,alphas*X+thresholds)
 		X = X.view(*list(orig_shape))
 		return X
-
-
-class Time2Vec(nn.Module):
-	'''
-	Time2Vec implementation from https://arxiv.org/pdf/1907.05321.pdf
-	
-	'''
-	def __init__(self,time_shape,emb_shape):
-		'''
-		Arguments:
-			time_shape {int} -- Input shape of time
-			emb_shape {int} -- output shape of embedding
-		'''
-		super(Time2Vec,self).__init__()
-		self.mat = nn.Linear(time_shape,emb_shape)
-		self.activation = torch.sin 
-
-	def forward(self,t):
-		emb = self.mat(t)
-		# print(emb.size())
-		emb = torch.cat([emb[:,:1],self.activation(emb[:,1:])],dim=1)
-		return emb
 
 class TimeEncodings(nn.Module):
 	def __init__(self,model_dim,time_dim,proj_time=False):
@@ -311,17 +364,14 @@ class TimeEncodings(nn.Module):
 #     def __init__(self,model_dim,encoding):
 
 class ConvBlock(nn.Module):
-	def __init__(self,in_channels, out_channels,kernel_size,stride=1,  padding=1,time_relu_size=None,time_shape=2,dropout=0.0,leaky_relu=True):
+	def __init__(self,in_channels, out_channels,time_relu_size,time_shape=2,kernel_size=3,leaky_relu=True):
 		super(ConvBlock,self).__init__()
-		self.conv = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size,stride=stride,  padding=padding)
-		self.batch_norm = nn.BatchNorm2d(out_channels)
+		self.conv = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size,  padding=1)
 		self.relu = TimeReLU(time_relu_size,time_shape=time_shape,leaky=leaky_relu)
-		self.dropout = nn.Dropout(dropout)
+
 	def forward(self,X,times):
 		X = self.conv(X)
-		X = self.batch_norm(X)
 		X = self.relu(X,times)
-		X = self.dropout(X)
 		return X
 
 
@@ -360,7 +410,12 @@ def reconstruction_loss(x,y):
 	# print(x.size(),y.size())
 	# if len(x.shape) == 3:
 	#     x = nn.Flatten()(x)
-	return torch.sum((x-y)**2,dim=1).sum(dim=1)
+
+	x_1 = x.view(x.size(0),-1)
+	y_1 = y.view(y.size(0),-1)
+	# print(torch.sum((x_1-y_1)**2,dim=1).size())
+	# print(x_1.size(),y_1.size(),torch.sum((x_1-y_1)**2,dim=1).size())
+	return torch.sum((x_1-y_1)**2,dim=1) #.sum(dim=1)
 
 
 def transformer_loss(trans_output,is_wasserstein=False):
@@ -375,13 +430,13 @@ def discounted_transformer_loss(rec_target_data, trans_data,trans_output, pred_c
 	#TODO put time_diff
 
 
-	re_loss = reconstruction_loss(rec_target_data, trans_data)
-	tr_loss = transformer_loss(trans_output,is_wasserstein)
+	re_loss = reconstruction_loss(rec_target_data, trans_data).view(-1,1)
+	tr_loss = transformer_loss(trans_output,is_wasserstein).view(-1,1)
 	# transformed_class = trans_data[:,-1].view(-1,1)
 
 	# print(actual_class,pred_class)
-	class_loss = classification_loss(pred_class,actual_class)
-	loss = torch.mean( 1.0* tr_loss.squeeze() +  0.0*re_loss + 0.5*class_loss)
+	class_loss = classification_loss(pred_class,actual_class).view(-1,1)
+	loss = torch.mean( 0.0* tr_loss.squeeze() +  0.0*re_loss + 0.5*class_loss)
 	# loss = tr_loss.mean()
 	return loss, tr_loss.mean(),re_loss.mean(), class_loss.mean()
 
