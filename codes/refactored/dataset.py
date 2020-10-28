@@ -12,12 +12,11 @@ class RotMNIST(torch.utils.data.Dataset):
 		'''
 
 		'''
-		self.indices = indices # np.random.shuffle(np.arange(n_samples))
-		self.transported_samples = transported_samples
+		self.indices = indices # Indices are the indices of the elements from the arrays which are emitted by this data-loader
+		self.transported_samples = transported_samples  # a 2-d array of OT maps
 		root = kwargs['data_path']
 		self.num_bins = kwargs['num_bins']  # using this we can get the bin corresponding to a U value
 		self.target_bin = target_bin
-		processed_folder = os.path.join(root, 'MNIST', 'processed')
 		self.X = np.load("{}/X.npy".format(root))
 		self.Y = np.load("{}/Y.npy".format(root))
 		self.A = np.load("{}/A.npy".format(root))
@@ -31,12 +30,8 @@ class RotMNIST(torch.utils.data.Dataset):
 		U = torch.tensor(self.U[idx]).float().to(self.device).view(1)
 		if self.transported_samples is not None:
 			source_bin = int(np.round(U.item() * self.num_bins)) 
-			transported_X = torch.from_numpy(self.transported_samples[source_bin][self.target_bin][idx % 1000]).float().to(self.device) #This should be similar to index fun    #.transform(X_item[
+			transported_X = torch.from_numpy(self.transported_samples[source_bin][self.target_bin][idx % 1000]).float().to(self.device) #This should be similar to index fun, an indexing function which takes the index of the source sample and returns the corresponding index of the target sample.
 			return X,transported_X,A,U,Y
-		
-		# print(bin,norm_angle)
-		# if self.verbose:
-		#   print(self.vgg)
 
 		return X,A,U,Y
 
