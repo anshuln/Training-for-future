@@ -37,3 +37,53 @@ class RotMNIST(torch.utils.data.Dataset):
 
 	def __len__(self):
 		return len(self.indices)
+
+
+class GradDataset(torch.utils.data.Dataset):
+	'''
+	Class which returns (image,label,angle,bin)
+	TODO - 1. Shuffle indices, bin and append angles
+		   2. Return 
+		   3. OT - make sure OT takes into account the labels, i.e. OT loss should be inf for interchanging labels.  
+	'''
+	def __init__(self,src_indices,target_indices,target_bin=None,n_samples=6000):
+		'''
+		You give it a set of indices, along with which bins they belong
+		It returns images from that MNIST bin
+		usage - indices = np.random.shuffle(np.arange(n_samples)) 
+		'''
+		self.src_indices = src_indices # np.random.shuffle(np.arange(n_samples))
+		self.target_indices = target_indices # np.random.shuffle(np.arange(n_samples))
+		self.target_labs = {}
+		root = kwargs['data_path']
+		self.X = np.load("{}/X.npy".format(root))
+		self.Y = np.load("{}/Y.npy".format(root))
+		self.A = np.load("{}/A.npy".format(root))
+		self.U = np.load("{}/U.npy".format(root))
+		self.device = kwargs['device']
+		self.target_bin = target_bin
+		# print(self.bins,self.bin_width)
+		# print("---------- READING MNIST ----------")
+		for i in self.target_indices:
+			if self.Y[i].item() not in self.target_labs.keys():
+				self.target_labs[self.Y[i].item()] = [i]
+			else:
+				self.target_labs[self.Y[i].item()].append(i)
+	def __getitem__(self,idx):
+		index = self.src_indices[idx]
+		image = torch.tensor(self.X[index])
+
+		label = torch.tensor(self.Y[index])
+
+		target_ids = self.target_labs[label.item()]
+		target_idx = target_ids[idx % len(target_ids)]
+
+		target_image = torch.tensor(self.X[target_idx])
+
+		# label = self.Y[index]
+		
+		# print(bin,norm_angle)
+
+		return image.to(self.device),target_image.to(self.device), (A[index]-self.target_bin).float().to(self.device)#, U[index].float().to(self.device), label.long().to(self.device)
+	def __len__(self):
+		return len(self.src_indices)        

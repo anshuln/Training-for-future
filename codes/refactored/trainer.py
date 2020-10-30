@@ -191,7 +191,7 @@ class TransformerTrainer():
 		self.BATCH_SIZE = args.bs
 		self.encoder = None
 		self.ot_maps = [[None for x in range(len(self.source_data_indices))] for y in range(len(self.source_data_indices))]
-				# TODO A_mean and U_source
+				# TODO A_mean and U_source -- DONE
 		self.IS_WASSERSTEIN = args.wasserstein_disc
 
 
@@ -330,20 +330,20 @@ class TransformerTrainer():
 			step = 0
 			for epoch in range(self.CLASSIFIER_EPOCHS//2):
 
-                loss = 0
+				loss = 0
 
-                for batch_X, batch_A, batch_U, batch_Y in source_dataset:
-                    batch_U = batch_U.view(-1,2)
-                    this_U = np.array([U_target[i]*BIN_WIDTH]*batch_U.shape[0]).reshape((batch_U.shape[0],1)) +\
-                    np.random.randint(0,5,size=(batch_U.shape[0],1))
-                    this_U = np.hstack([np.array([U_target[i]]*batch_U.shape[0]).reshape((batch_U.shape[0],1)),
-                        this_U/(BIN_WIDTH * 6)])
-                    this_U = torch.tensor(this_U).float().view(-1,2).to(device)
-                      # batch_X = torch.cat([batch_X, batch_U, this_U], dim=1)
-                    step += 1
-                    loss += train_classifier(batch_X,batch_U,this_U, batch_Y, self.classifier,self.transformer, self.classifier_optimizer,encoder=self.encoder)
+				for batch_X, batch_A, batch_U, batch_Y in source_dataset:
+					batch_U = batch_U.view(-1,2)
+					this_U = np.array([U_target[i]*BIN_WIDTH]*batch_U.shape[0]).reshape((batch_U.shape[0],1)) +\
+					np.random.randint(0,5,size=(batch_U.shape[0],1))
+					this_U = np.hstack([np.array([U_target[i]]*batch_U.shape[0]).reshape((batch_U.shape[0],1)),
+						this_U/(BIN_WIDTH * 6)])
+					this_U = torch.tensor(this_U).float().view(-1,2).to(device)
+					  # batch_X = torch.cat([batch_X, batch_U, this_U], dim=1)
+					step += 1
+					loss += train_classifier(batch_X,batch_U,this_U, batch_Y, self.classifier,self.transformer, self.classifier_optimizer,encoder=self.encoder)
 
-                print('Epoch: %d - ClassificationLoss: %f' % (epoch, loss))
+				print('Epoch: %d - ClassificationLoss: %f' % (epoch, loss))
 
 
 
@@ -387,7 +387,7 @@ class CrossGradTrainer():
 		for idx in range(1,len(self.source_domain_indices)):
 			source_indices = self.cumulative_data_indices[idx-1]
 			grad_target_indices =  self.source_data_indices[idx]
-			data_set = self.DataSet(source_indices=source_indices,target_indices=target_indices,**self.dataset_kwargs) #RotMNISTCGrad(source_indices,grad_target_indices,BIN_WIDTH,src_indices[0]-1,6,src_indices[idx]-1)
+			data_set = self.DataSet(source_indices=source_indices,target_indices=target_indices,target_bin=self.target_bin,**self.dataset_kwargs) #RotMNISTCGrad(source_indices,grad_target_indices,BIN_WIDTH,src_indices[0]-1,6,src_indices[idx]-1)
 			for epoch in range(self.EPOCH):
 				data = torch.utils.data.DataLoader(data_set,self.BATCH_SIZE,self.shuffle)
 				for img_1,img_2,time_diff in data:
