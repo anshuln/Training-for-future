@@ -232,7 +232,7 @@ class TransformerTrainer():
 
     def train_classifier(self):
         class_step = 0
-        past_data = self.DataSet(indices=self.cumulative_data_indices[-1],**self.dataset_kwargs)
+        past_data = self.DataSet(indices=self.cumulative_data_indices[len(self.source_domain_indices)-1],**self.dataset_kwargs)
         for epoch in range(self.CLASSIFIER_EPOCHS):
             past_dataset = torch.utils.data.DataLoader((past_data),self.BATCH_SIZE,True)
             class_loss = 0
@@ -379,7 +379,7 @@ class CrossGradTrainer():
             self.classifier = ClassifyNet(28**2 + 2,256,10, use_vgg=args.encoder).to(args.device)
             self.classifier_optimizer = torch.optim.Adagrad(self.classifier.parameters(),5e-3)
             self.model_gn = GradNet(28**2 + 2*2, 256, use_vgg=args.encoder).to(args.device)
-            self.optimizer_gn = torch.optim.Adagrad(self.model_gn.parameters(),5e-2)
+            self.optimizer_gn = torch.optim.Adagrad(self.model_gn.parameters(),5e-3)
             if args.encoder:
                 self.encoder = Encoder().to(args.device)
             else:
@@ -401,8 +401,26 @@ class CrossGradTrainer():
             #from model_moons import GradModel
             # Load models and optimizers here!
 
+        if args.data == "cars":
+            self.dataset_kwargs = {"root_dir":"../../data/CompCars/","device":args.device}
+            self.source_domain_indices = np.arange(29) #[0,1,2,3]
+            # self.target_u = 4/6
+            data_index_file = "../../data/CompCars/indices_list.json"
+            self.out_shape = (-1,16,28,28)
+            from model_MNIST_conv import GradNet, ClassifyNetCars, EncoderCars
+            self.classifier = ClassifyNetCars(28**2 + 2,256,10, use_vgg=args.encoder).to(args.device)
+            self.classifier_optimizer = torch.optim.Adagrad(self.classifier.parameters(),5e-3)
+            self.model_gn = GradNet(28**2 + 2*2, 256, use_vgg=args.encoder).to(args.device)
+            self.optimizer_gn = torch.optim.Adagrad(self.model_gn.parameters(),5e-2)
+            if args.encoder:
+                self.encoder = EncoderCars().to(args.device)
+            else:
+                self.encoder = None
+
+        # self.source_data_indices = json.load(open(data_index_file,"r")) #, allow_pickle=True)
         self.source_data_indices = np.load(data_index_file, allow_pickle=True)
         self.cumulative_data_indices = get_cumulative_data_indices(self.source_data_indices)
+        # self.target_indices = self.cumulative_data_indices[-1]
         # print(self.cumulative_data_indices)
         self.shuffle = True
         # self.data_shape = (-1,16,28,28)
@@ -449,7 +467,7 @@ class CrossGradTrainer():
 
             data_set = self.DataSet(self.dataset_kwargs['root_dir'], source_indices=source_indices,target_indices=grad_target_indices,**self.dataset_kwargs) #RotMNISTCGrad(source_indices,grad_target_indices,BIN_WIDTH,src_indices[0]-1,6,src_indices[idx]-1)
             print("Training Cross grad with {}".format(len(data_set)))
-            for epoch in range(self.EPOCH):
+            for epoch in range(int(self.EPOCH*(1+idx/4))):
                 
                 data = torch.utils.data.DataLoader(data_set,self.BATCH_SIZE,self.shuffle)
                 for img_1,img_2,time_diff in data:
@@ -465,12 +483,12 @@ class CrossGradTrainer():
                     loss = ((time_diff.view(-1,1) - time_diff_pred.view(-1,1))**2).sum()
                     loss.backward()
                     self.optimizer_gn.step()
-                    print('Epoch %d - %f' % (epoch, loss.detach().cpu().numpy()),flush=True,end='\r')
+                print('Epoch %d - %f' % (epoch, loss.detach().cpu().numpy()))
 
     def construct_final_dataset(self):
 
         self.final_dataset = []
-        past_data = torch.utils.data.DataLoader(ClassificationDataSet(self.dataset_kwargs['root_dir'], indices=self.cumulative_data_indices[-1],**self.dataset_kwargs),self.BATCH_SIZE,shuffle=False,drop_last=True) 
+        past_data = torch.utils.data.DataLoader(ClassificationDataSet(self.dataset_kwargs['root_dir'], indices=self.cumulative_data_indices[len(self.source_domain_indices)-1],**self.dataset_kwargs),self.BATCH_SIZE,shuffle=False,drop_last=True) 
         time = self.target_u
         new_images = []
         new_labels = []
@@ -496,7 +514,7 @@ class CrossGradTrainer():
             new_images.append(i2.detach().cpu().numpy())
             new_labels.append(label.view(-1,1).detach().cpu().numpy())
         new_ds_x, new_ds_y = np.vstack(new_images), np.vstack(new_labels)
-        new_ds_u = np.hstack([np.array([time]*len(new_ds_x)).reshape(-1,1),np.array([5/6]*len(new_ds_x)).reshape(-1,1)])
+        new_ds_u = np.hstack([np.array([time]*len(new_ds_x)).reshape(-1,1),np.array([self.target_u]*len(new_ds_x)).reshape(-1,1)])
         print("Finetune with len {}".format(len(new_ds_x)))
         self.classification_dataset = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(new_ds_x).float().to(self.device),torch.tensor(new_ds_u[:,0]).float().view(-1,1).to(self.device),torch.tensor(new_ds_u[:,1]).view(-1,1).float().to(self.device),
              torch.tensor(new_ds_y).long().to(self.device)),self.CLASSIFICATION_BATCH_SIZE,self.shuffle)
@@ -530,10 +548,10 @@ class CrossGradTrainer():
         # print(self.encoder)
         
         self.train_classifier(encoder=self.encoder)  # Train classifier initially
-        self.train_cross_grad()  # Train model for cross-grad
-        self.construct_final_dataset()  # Perturb source dataset for finetuning
-        self.CLASSIFIER_EPOCHS = self.CLASSIFIER_EPOCHS//2
-        self.train_classifier(self.classification_dataset)  
+        # self.train_cross_grad()  # Train model for cross-grad
+        # self.construct_final_dataset()  # Perturb source dataset for finetuning
+        # self.CLASSIFIER_EPOCHS = self.CLASSIFIER_EPOCHS//2
+        # self.train_classifier(self.classification_dataset)  
         self.eval_classifier()
 
 '''Game plan

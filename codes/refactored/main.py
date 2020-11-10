@@ -24,7 +24,8 @@ def main(args):
             load_moons(args)
         if args.data == "sleep":
             load_sleep2()
-
+        if args.data == "cars":
+            load_comp_cars()
     if args.train_algo == "transformer":
         trainer = TransformerTrainer(args)
     elif args.train_algo == "grad":
@@ -39,7 +40,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     """ Arguments: arg """
     parser.add_argument('--train_algo',help="String, needs to be one of grad or transformer")
-    parser.add_argument('--data',help="String, needs to be one of mnist, sleep, moons")
+    parser.add_argument('--data',help="String, needs to be one of mnist, sleep, moons, cars")
     parser.add_argument('--epoch_transform',default=5,help="Needs to be int, number of epochs for transformer/ordinal classifier",type=int)
     parser.add_argument('--epoch_classifier',default=5,help="Needs to be int, number of epochs for classifier",type=int)
     parser.add_argument('--bs',default=256,help="Batch size",type=int)

@@ -25,6 +25,18 @@ class Encoder(nn.Module):
         X = self.model(X).view(-1,16,28,28)
         return X
 
+class EncoderCars(nn.Module):
+    """docstring for Encoder"""
+    '''Deprecated class for Encoder module
+    
+    We now use VGG for encoding. Also try an end-2-end encoder
+    '''
+    def __init__(self):
+        super(EncoderCars, self).__init__()
+        self.model = tv_models.vgg16(pretrained=True).features
+    def forward(self,X):
+        X = self.model(X).view(-1,32,28,28)
+        return X
 
 class GradNet(nn.Module):
     def __init__(self,data_shape, hidden_shape, time_conditioning=True,leaky=False,use_vgg=False):
@@ -154,6 +166,69 @@ class ClassifyNet(nn.Module):
 
         return X
 
+
+class ClassifyNetCars(nn.Module):
+    def __init__(self,data_shape, hidden_shape, n_classes, append_time=False,encode_time=False,time_conditioning=True,leaky=True,use_vgg=False):
+        super(ClassifyNetCars,self).__init__()
+
+        self.time_conditioning = time_conditioning
+        self.append_time = append_time
+        self.encode_time = encode_time
+        if use_vgg:
+            in_channels = 32
+        else:
+            in_channels = 1
+
+        if self.append_time:
+            in_channels += 2
+        else:
+            in_channels += 0
+        if self.encode_time:
+            self.time_enc = TimeEncodings(784,2)
+
+        self.flat = nn.Flatten()
+        self.layer_0 = nn.Conv2d(in_channels=in_channels, out_channels=8, kernel_size=3)
+        self.relu_0    = TimeReLU(13*13*8,2,leaky)
+        # self.relu_0 = nn.ReLU()
+        if time_conditioning:
+            self.layer_1 = nn.Conv2d(in_channels=8, out_channels=16, kernel_size=3)
+            self.layer_2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3)
+            self.relu_1 = TimeReLU(200*2,2,leaky)
+            self.relu_2 = TimeReLU(72*4,2,leaky)
+            # self.relu_t = nn.ReLU()
+        self.down_sampling = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.out_layer = nn.Linear(72*4,n_classes)
+        self.out_relu = TimeReLU(n_classes,2,leaky)
+
+    def forward(self,X,times):
+        if len(X.size()) < 4:
+            X = X.unsqueeze(1)
+        
+        if self.encode_time:
+            X = self.time_enc(X,times)
+
+        if self.append_time:
+            times_ = times.unsqueeze(1).unsqueeze(2).repeat(1,1,28,28)
+            X = torch.cat([X,times],dim=1)
+
+        X  = self.layer_0(X)
+        X  = self.down_sampling(X)
+        X  = self.relu_0(X,times)
+
+
+        if self.time_conditioning:
+            X = self.layer_1(X)
+            X = self.down_sampling(X)
+            X = self.relu_1(X,times)
+            X = self.layer_2(X)
+            X = self.relu_2(X,times)
+
+        # print(X.size())
+        X = self.out_layer(X.view(X.size(0),-1))
+        X = self.out_relu(X,times)
+        X = torch.softmax(X,dim=1)
+
+        return X
 
 class Transformer(nn.Module):
     def __init__(self,data_shape, latent_shape,append_time=False,encode_time=False, label_dim=0,use_vgg=False):
