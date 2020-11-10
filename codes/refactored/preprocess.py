@@ -11,9 +11,12 @@ import torch
 import os
 import json
 from PIL import Image
+from utils import *
 
+MOON_SAMPLES = 200
+ROTNIST_SAMPLES = 1000
 
-def load_sleep2(filename):
+def load_sleep(filename):
 
 	domains = 5
 	
@@ -76,33 +79,52 @@ def load_sleep2(filename):
 	np.save(np.array(U_data))
 	# Save indices
 
-def load_moons(domains):
+def load_moons(domains, root='../../data'):
 
-	X_data, Y_data, U_data = [], [], []
+	"""
+
+	Save the Rotated 2-moons dataset to an npy file
+
+	Parameters
+	----------
+
+	domains : No of domains for which samples are to be generated. Each domain is an 18 degree rotation of the previous domain
+
+	root : Root directory where the .npy files sill be stored. The files are stored under `{root}/Moons/processed`
+
+	"""
+
+	X_data, Y_data, A_data, U_data = [], [], [], []
+	processed_folder = os.path.join(root, 'Moons', 'processed')
+
 	for i in range(domains):
 
-		angle = i*math.pi/(domains-1);
+		angle = i*math.pi/(domains-1)
+
 		X, Y = make_moons(n_samples=200, noise=0.1)
 		rot = np.array([[math.cos(angle), math.sin(angle)], [-math.sin(angle), math.cos(angle)]])
 		X = np.matmul(X, rot)
-		
-		#plt.scatter(X[:,0], X[:,1], c=Y)
-		#plt.savefig('moon_%d' % i)
-		#plt.clf()
 
-		Y = np.eye(2)[Y]  # Can we change this to 0/1 labels 
-		U = np.array([i] * 200)
+		Y = np.eye(2)[Y]  
+		U = np.array([i//domains] * 200)
+		A = np.array([i//domains] * 200)
 
 		X_data.append(X)
 		Y_data.append(Y)
+		A_data.append(A)
 		U_data.append(U)
 
-	np.save(np.array(X_data))
-	np.save(np.array(Y_data))
-	np.save(np.array(A_data))
-	np.save(np.array(U_data))
+	all_indices = [[x for x in range(i*MOON_SAMPLES,(i+1)*MOON_SAMPLES)] for i in range(domains)]
+
+	np.save("{}/X.npy".format(processed_folder), X_data, allow_pickle=True)
+	np.save("{}/Y.npy".format(processed_folder), Y_data, allow_pickle=True)
+	np.save("{}/A.npy".format(processed_folder), A_data, allow_pickle=True)
+	np.save("{}/U.npy".format(processed_folder), U_data, allow_pickle=True)
+	np.save("{}/indices.npy".format(processed_folder), all_indices, allow_pickle=True)
+	#json.dump(all_indices, open("{}/indices.json".format(processed_folder),"w"))
 
 def load_Rot_MNIST(use_vgg,root="../../data"):
+
 	mnist_ind = (np.arange(60000))
 	np.random.shuffle(mnist_ind)
 	mnist_ind = mnist_ind[:6000]
@@ -116,7 +138,7 @@ def load_Rot_MNIST(use_vgg,root="../../data"):
 	all_labels = []
 	all_U = []
 	all_A = []
-	all_indices = [[x for x in range(i*1000,(i+1)*1000)] for i in range(6)]
+	all_indices = [[x for x in range(i*ROTNIST_SAMPLES,(i+1)*ROTNIST_SAMPLES)] for i in range(4)]
 	for idx in range(len(mnist_ind)):
 		index = mnist_ind[idx]
 		bin = int(idx / 1000)
@@ -128,6 +150,9 @@ def load_Rot_MNIST(use_vgg,root="../../data"):
 		if use_vgg:
 			image = image.reshape((1,28,28)).repeat(3,axis=0)
 			image = (image - vgg_means)/vgg_stds
+		else:
+			image = image.reshape((1,28,28))
+			# image = (image - vgg_means)/vgg_stds
 
 		all_images.append(image)
 		all_labels.append(targets[index])
@@ -138,6 +163,7 @@ def load_Rot_MNIST(use_vgg,root="../../data"):
 	np.save("{}/Y.npy".format(processed_folder),np.array(all_labels),allow_pickle=True)
 	np.save("{}/A.npy".format(processed_folder),np.array(all_A),allow_pickle=True)
 	np.save("{}/U.npy".format(processed_folder),np.array(all_U),allow_pickle=True)
-	json.dump(all_indices,open("{}/indices.json".format(processed_folder),"w"))
+	np.save("{}/indices.npy".format(processed_folder), all_indices, allow_pickle=True)
+	# json.dump(all_indices, open("{}/indices.json".format(processed_folder),"w"))
 
-load_Rot_MNIST(use_vgg=False)
+# load_moons(5)

@@ -1,0 +1,30 @@
+In file preprocess.py 
+---------- 
+ 
+==========
+In file main.py 
+---------- 
+ 
+==========
+In file trainer.py 
+---------- 
+Line 47:    ot_loss = ot_transformer_loss(X_pred, source_U,dest_U,pred_disc, X_transported,is_wasserstein=is_wasserstein) # (in function train_transformer_batch) 
+  - see if correct, why is X needed here? 
+Line 173:   self.out_shape = (-1,) # (in function __init__) 
+  
+Line 179:   self.out_shape = (-1,2) # (in function __init__) 
+  
+Line 194:    (in function __init__) 
+  A_mean and U_source -- DONE 
+Line 370:   self.out_shape = (-1,) # (in function __init__) 
+  
+Line 376:   self.out_shape = (-1,2) # (in function __init__) 
+  
+ 
+==========
+In file dataset.py 
+---------- 
+Line 7: General TODO 
+  - 1. Shuffle indices, bin and append angles 
+ 
+==========
