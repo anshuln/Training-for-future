@@ -43,7 +43,7 @@ if __name__ == '__main__':
     parser.add_argument('--data',help="String, needs to be one of mnist, sleep, moons, cars")
     parser.add_argument('--epoch_transform',default=5,help="Needs to be int, number of epochs for transformer/ordinal classifier",type=int)
     parser.add_argument('--epoch_classifier',default=5,help="Needs to be int, number of epochs for classifier",type=int)
-    parser.add_argument('--bs',default=256,help="Batch size",type=int)
+    parser.add_argument('--bs',default=100,help="Batch size",type=int)
     parser.add_argument('--wasserstein_disc',action='store_true',help="Should we use a wasserstein discriminator")
     parser.add_argument('--use_cuda',action='store_true',help="Should we use a GPU")
     parser.add_argument('--preprocess',action='store_true',help="Do we pre-process the data?")

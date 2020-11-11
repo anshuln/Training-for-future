@@ -365,8 +365,8 @@ class CrossGradTrainer():
         self.DataSetClassifier = ClassificationDataSet
         self.CLASSIFIER_EPOCHS = args.epoch_classifier
         self.EPOCH = args.epoch_transform
-        self.BATCH_SIZE = 256
-        self.CLASSIFICATION_BATCH_SIZE = 256
+        self.BATCH_SIZE = 100
+        self.CLASSIFICATION_BATCH_SIZE = 100
 
         if args.data == "mnist":
             self.dataset_kwargs = {"root_dir":"../../data/MNIST/processed/","device":args.device}
@@ -375,13 +375,13 @@ class CrossGradTrainer():
             self.target_indices = np.arange(4000,5000)
             data_index_file = "../../data/MNIST/processed/indices.npy"
             self.out_shape = (-1,16,28,28)
-            from model_MNIST_conv import GradNet, ClassifyNet, Encoder
-            self.classifier = ClassifyNet(28**2 + 2,256,10, use_vgg=args.encoder).to(args.device)
+            from models import GradNet, ClassifyNetCNN, EncoderCNN
+            self.classifier = ClassifyNetCNN(28**2 + 2,256,10, use_vgg=args.encoder).to(args.device)
             self.classifier_optimizer = torch.optim.Adagrad(self.classifier.parameters(),5e-3)
-            self.model_gn = GradNet(28**2 + 2*2, 256, use_vgg=args.encoder).to(args.device)
-            self.optimizer_gn = torch.optim.Adagrad(self.model_gn.parameters(),5e-3)
+            # self.model_gn = GradNet(28**2 + 2*2, 256, use_vgg=args.encoder).to(args.device)
+            # self.optimizer_gn = torch.optim.Adagrad(self.model_gn.parameters(),5e-3)
             if args.encoder:
-                self.encoder = Encoder().to(args.device)
+                self.encoder = EncoderCNN().to(args.device)
             else:
                 self.encoder = None
 
@@ -440,10 +440,11 @@ class CrossGradTrainer():
     def train_classifier(self,past_dataset=None,encoder=None):
         
         class_step = 0
-        if past_dataset is None:
-            past_data = ClassificationDataSet(self.dataset_kwargs['root_dir'], indices=self.cumulative_data_indices[-1],**self.dataset_kwargs)
-            print(len(past_data))
-            past_dataset = torch.utils.data.DataLoader((past_data),self.BATCH_SIZE,True)
+        # for i in range(len(self.source_domain_indices)):
+            # if past_dataset is None:
+        past_data = ClassificationDataSet(self.dataset_kwargs['root_dir'], indices=self.source_data_indices[-1],**self.dataset_kwargs)
+        print(len(past_data))
+        past_dataset = torch.utils.data.DataLoader((past_data),self.BATCH_SIZE,True)
         for epoch in range(self.CLASSIFIER_EPOCHS):
             
             class_loss = 0
@@ -522,7 +523,7 @@ class CrossGradTrainer():
 
     def eval_classifier(self):
         td = ClassificationDataSet(self.dataset_kwargs['root_dir'], indices=self.target_indices,**self.dataset_kwargs)
-        target_dataset = torch.utils.data.DataLoader(td,self.BATCH_SIZE,self.shuffle,drop_last=True)
+        target_dataset = torch.utils.data.DataLoader(td,self.BATCH_SIZE,self.shuffle,drop_last=False)
         Y_pred = []
         Y_label = []
         for batch_X, batch_A,batch_U, batch_Y in tqdm(target_dataset):
