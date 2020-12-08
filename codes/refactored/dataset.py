@@ -1,6 +1,8 @@
 import torch
 import numpy as np
 import os
+
+from utils import get_closest
 class RotMNIST(torch.utils.data.Dataset):
     '''
     Class which returns (image,label,angle,bin)
@@ -56,6 +58,7 @@ class ClassificationDataSet(torch.utils.data.Dataset):
         self.Y = np.load("{}/Y.npy".format(self.root))
         self.A = np.load("{}/A.npy".format(self.root))
         self.U = np.load("{}/U.npy".format(self.root))
+        self.drop_cols = kwargs['drop_cols_classifier'] if kwargs.get('drop_cols_classifier') else None
         
     def __getitem__(self,idx):
 
@@ -67,8 +70,12 @@ class ClassificationDataSet(torch.utils.data.Dataset):
         if self.transported_samples is not None:
             source_bin = int(np.round(U.item() * self.num_bins)) 
             transported_X = torch.from_numpy(self.transported_samples[source_bin][self.target_bin][idx % 1000]).float().to(self.device) #This should be similar to index fun, an indexing function which takes the index of the source sample and returns the corresponding index of the target sample.
+            if self.drop_cols is not None:
+                return X[:self.drop_cols],transported_data[:self.drop_cols], auxiliary, domain,  label
             return X,transported_data, auxiliary, domain,  label
 
+        if self.drop_cols is not None:
+            return data[:self.drop_cols], auxiliary, domain, label
         return data, auxiliary, domain, label
 
     def __len__(self):
@@ -103,39 +110,56 @@ class GradDataset(torch.utils.data.Dataset):
         self.U = np.load("{}/U.npy".format(self.root))
         
         self.device = kwargs['device'] if kwargs.get('device') else 'cpu'
-        
+        self.drop_cols = kwargs['drop_cols'] if kwargs.get('drop_cols') else None
+        self.rand_target = kwargs['rand_target'] if kwargs.get('rand_target') else False
+        self.append_label = kwargs['append_label'] if kwargs.get('append_label') else False
+        self.label_dict_func = kwargs['label_dict_func'] if kwargs.get('label_dict_func') else lambda x: int(x)
         self.target_bin = target_bin
 
         # print(self.bins,self.bin_width)
         # print("---------- READING MNIST ----------")
-
-        for i in self.target_indices:
-          if self.Y[i].item() not in self.target_labs.keys():
-              self.target_labs[self.Y[i].item()] = [i]
-          else:
-              self.target_labs[self.Y[i].item()].append(i)
+        if self.rand_target == False:
+            for i in self.target_indices:
+              if self.label_dict_func(self.Y[i].item()) not in self.target_labs.keys():
+                  self.target_labs[self.label_dict_func(self.Y[i].item())] = [i]
+              else:
+                  self.target_labs[self.label_dict_func(self.Y[i].item())].append(i)
 
     def __getitem__(self, idx):
         
         index = self.src_indices[idx]
         
-        data = torch.tensor(self.X[index]).float()
-        label = torch.tensor(self.Y[index])
-        a_info = torch.tensor(self.A[index]).float()
+        data   = torch.tensor(self.X[index]).float()
+        label  = torch.tensor(self.Y[index])
+        a_info = torch.tensor(self.U[index]).float()
         
-
-        target_ids = self.target_labs[label.item()]
-        target_idx = target_ids[idx % len(target_ids)]
+        if self.rand_target:
+            target_idx = np.random.randint(idx,len(self.target_indices))#idx % len(self.target_indices)
+            target_idx = self.target_indices[target_idx]
+        else:
+            try:
+                target_ids = self.target_labs[self.label_dict_func(label.item())]
+            except KeyError:
+                target_ids = self.target_labs[get_closest(list(self.target_labs.keys()),self.label_dict_func(label.item()))] 
+            target_idx = target_ids[np.random.randint(0,len(target_ids))]
 
         # target_idx = self.target_indices
-        target_data = torch.tensor(self.X[target_idx]).float()
-        a_info_target = torch.tensor(self.A[target_idx]).float()
+        target_data   = torch.tensor(self.X[target_idx]).float()
+        a_info_target = torch.tensor(self.U[target_idx]).float()
+
+        if self.drop_cols is not None:
+            target_data = target_data[:self.drop_cols]
+            data        = data[:self.drop_cols]
 
         # label = self.Y[index]
-        
+        if self.append_label:
+            data         = torch.cat([data,label.view(1).float()],dim=0)
+            target_label = torch.tensor(self.Y[target_idx])
+            target_data  = torch.cat([target_data,target_label.view(1).float()],dim=0)
+
         # print(bin,norm_angle)
 
-        return data.to(self.device),target_data.to(self.device), (a_info-a_info_target).float().to(self.device)#, U[index].float().to(self.device), label.long().to(self.device)
+        return data.to(self.device),target_data.to(self.device), 10*(a_info_target-a_info).float().to(self.device)#, U[index].float().to(self.device), label.long().to(self.device)
     
     def __len__(self):
         return len(self.src_indices)        

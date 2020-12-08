@@ -32,3 +32,14 @@ def store_numpy_array(filepath, array, allow_pickle=True, fix_imports=True):
 
     with open(filepath, 'wb') as file:
         np.save(file, array, allow_pickle, fix_imports)
+
+def get_closest(lst,item):
+    '''Returns the element of the list closest in value to item
+    
+    
+    Arguments:
+        lst {[type]} -- [description]
+        item {[type]} -- [description]
+    ''' 
+    index = np.argmin(np.abs(np.array([x-item for x in lst])))
+    return lst[index]

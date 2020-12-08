@@ -26,7 +26,7 @@ class RegularizedSinkhornTransport(BaseTransport):
 		super(RegularizedSinkhornTransport, self).fit(Xs=Xs, ys=ys, Xt=Xt, yt=yt)
 
 		gamma = np.random.rand(Xs.shape[0], Xt.shape[0])
-		gamma = gamma / (np.sum(gamma, 1)[:, None] + 1e-10)		
+		gamma = gamma / (np.sum(gamma, 1)[:, None] + 1e-10)     
 		gamma[~ np.isfinite(gamma)] = 0
 
 		for k in range(5):
@@ -153,7 +153,7 @@ class RegularizedSinkhornTransportOTDA(BaseTransport):
 
 
 		gamma = np.random.rand(Xs.shape[0], Xt.shape[0])
-		gamma = gamma / np.sum(gamma, 1)[:, None]		
+		gamma = gamma / np.sum(gamma, 1)[:, None]       
 		gamma[~ np.isfinite(gamma)] = 0
 
 		for k in range(5):

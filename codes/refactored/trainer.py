@@ -14,6 +14,8 @@ from tqdm import tqdm
 from losses import *
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
 
+
+np.set_printoptions(precision = 3)
 def train_transformer_batch(X,source_A,source_U,dest_A,dest_U,Y,X_transported,transformer,discriminator,classifier,transformer_optimizer, is_wasserstein=False,encoder=None):
     
     '''Trains the transformer on one batch
@@ -103,7 +105,7 @@ def train_discriminator_batch(X_old, source_A, source_U, dest_A, dest_U, X_now, 
 
 
 
-def train_classifier_batch(X,dest_u,dest_a,Y,classifier,classifier_optimizer,batch_size,verbose=False,encoder=None, transformer=None,source_u=None, kernel=None):
+def train_classifier_batch(X,dest_u,dest_a,Y,classifier,classifier_optimizer,batch_size,verbose=False,encoder=None, transformer=None,source_u=None, kernel=None,loss_fn=classification_loss):
     '''Trains classifier on a batch
     
     [description]
@@ -131,9 +133,9 @@ def train_classifier_batch(X,dest_u,dest_a,Y,classifier,classifier_optimizer,bat
     else:
         X_pred = X
 
-    Y_pred = classifier(X_pred,dest_u)
+    Y_pred = classifier(X_pred,dest_a)
 
-    pred_loss = classification_loss(Y_pred, Y)
+    pred_loss = loss_fn(Y_pred, Y)
     if kernel is not None:
         pred_loss = pred_loss * kernel
     pred_loss = pred_loss.sum()/batch_size
@@ -149,7 +151,7 @@ def train_classifier_batch(X,dest_u,dest_a,Y,classifier,classifier_optimizer,bat
 
 class TransformerTrainer():
     def __init__(self,args):
-        self.DataSet = RotMNIST 
+        self.DataSet = ClassificationDataSet 
         if args.data == "mnist":
             self.dataset_kwargs = {"data_path":"../../data/MNIST/processed/","device":args.device,"num_bins": 6}
             self.source_domain_indices = [1,2,3,4]
@@ -183,8 +185,38 @@ class TransformerTrainer():
             from model_moons import  Transformer
             # Load models and optimizers here!
 
-        self.source_data_indices = json.load(open(data_index_file,"r"))  # List of lists of length same as source_domain_indices, each element is a list of indices of that domain's elements in the overall concatenated dataset
+
+        if args.data == "house":
+            self.dataset_kwargs = {"root_dir":"../../data/HousePrice","device":args.device, "drop_cols":30, "rand_target":False, "append_label":True, "label_dict_func": lambda x:int(x)//10}
+            self.source_domain_indices = [6,7,8,9,10]
+            self.target_a = 1.0
+            self.target_u = 11/12
+            self.target_domain_indices = [11]
+            data_index_file = "../../data/HousePrice/indices.json"
+            from models import ClassifyNet, Transformer, Discriminator
+            self.classifier = ClassifyNet(32,[10,2],1, use_vgg=args.encoder,time_conditioning=False,use_time2vec=False).to(args.device)
+            self.classifier_optimizer = torch.optim.Adagrad(self.classifier.parameters(),5e-1)
+
+            self.transformer = Transformer(28**2 + 2*2, 256, use_vgg=args.encoder).to(args.device)
+            self.transformer_optimizer = torch.optim.Adagrad(self.transformer.parameters(),5e-2)
+            self.discriminator = Discriminator(28**2 + 2, 256,args.wasserstein_disc, use_vgg=args.encoder).to(args.device)
+            self.discriminator_optimizer = torch.optim.Adagrad(self.discriminator.parameters(),1e-3)
+
+            self.classifier_loss_fn = reconstruction_loss
+            self.task = 'regression'
+            if args.encoder:
+                self.encoder = EncoderCNN().to(args.device)
+            else:
+                self.encoder = None         
+
+        data_indices = json.load(open(data_index_file,"r")) #, allow_pickle=True)
+        # self.source_data_indices = np.load(data_index_file, allow_pickle=True)
+        self.source_data_indices = [data_indices[i] for i in self.source_domain_indices]
         self.cumulative_data_indices = get_cumulative_data_indices(self.source_data_indices)
+        self.target_indices = [data_indices[i] for i in self.target_domain_indices][0]  # TODO Flatten this list instead of picking 0th ele
+        # self.target_indices = self.cumulative_data_indices[-1]
+        # print(self.cumulative_data_indices)
+        self.shuffle = True
         assert len(self.source_domain_indices) == len(self.source_data_indices)
         self.device = args.device
         self.CLASSIFIER_EPOCHS = args.epoch_classifier 
@@ -240,7 +272,7 @@ class TransformerTrainer():
 
                 # batch_X = torch.cat([batch_X,batch_U.view(-1,2)],dim=1)
 
-                l = train_classifier_batch(X=batch_X,dest_u=batch_U,dest_a=batch_A,Y=batch_Y,classifier=self.classifier,classifier_optimizer=self.classifier_optimizer,verbose=False,encoder=self.encoder, batch_size=self.BATCH_SIZE)
+                l = train_classifier_batch(X=batch_X,dest_u=batch_U,dest_a=batch_A,Y=batch_Y,classifier=self.classifier,classifier_optimizer=self.classifier_optimizer,verbose=False,encoder=self.encoder, batch_size=self.BATCH_SIZE,loss_fn=self.classify_loss_fn)
                 class_step += 1
                 class_loss += l
             print("Epoch %d Loss %f"%(epoch,class_loss),flush=False)
@@ -364,26 +396,51 @@ class CrossGradTrainer():
         self.DataSet = GradDataset
         self.DataSetClassifier = ClassificationDataSet
         self.CLASSIFIER_EPOCHS = args.epoch_classifier
-        self.EPOCH = args.epoch_transform
-        self.BATCH_SIZE = 100
+        self.SUBEPOCHS = 5
+        self.EPOCH = args.epoch_transform // self.SUBEPOCHS
+        self.BATCH_SIZE = args.bs
         self.CLASSIFICATION_BATCH_SIZE = 100
+        self.data = args.data 
 
         if args.data == "mnist":
             self.dataset_kwargs = {"root_dir":"../../data/MNIST/processed/","device":args.device}
             self.source_domain_indices = [0,1,2,3]
-            self.target_u = 4/6
+            self.target_a = 4/6
             self.target_indices = np.arange(4000,5000)
             data_index_file = "../../data/MNIST/processed/indices.npy"
             self.out_shape = (-1,16,28,28)
-            from models import GradNet, ClassifyNetCNN, EncoderCNN
+            from models import GradNetCNN, ClassifyNetCNN, EncoderCNN
             self.classifier = ClassifyNetCNN(28**2 + 2,256,10, use_vgg=args.encoder).to(args.device)
             self.classifier_optimizer = torch.optim.Adagrad(self.classifier.parameters(),5e-3)
-            # self.model_gn = GradNet(28**2 + 2*2, 256, use_vgg=args.encoder).to(args.device)
-            # self.optimizer_gn = torch.optim.Adagrad(self.model_gn.parameters(),5e-3)
+            self.model_gn = GradNetCNN(28**2 + 2*2, 256, use_vgg=args.encoder).to(args.device)
+            self.optimizer_gn = torch.optim.Adagrad(self.model_gn.parameters(),5e-3)
+            self.classifier_loss_fn = classifier_loss
+            self.task = 'classification'
             if args.encoder:
                 self.encoder = EncoderCNN().to(args.device)
             else:
                 self.encoder = None
+
+
+        if args.data == "house":
+            self.dataset_kwargs = {"root_dir":"../../data/HousePrice","device":args.device, "drop_cols":30, "rand_target":False, "append_label":True, "label_dict_func": lambda x:int(x)//10}
+            self.source_domain_indices = [6,7,8,9,10]
+            self.target_a = 1.0
+            self.target_u = 11/12
+            self.target_domain_indices = [11]
+            data_index_file = "../../data/HousePrice/indices.json"
+            from models import GradNet, ClassifyNet, Encoder
+            self.classifier = ClassifyNet(32,[10,2],1, use_vgg=args.encoder,time_conditioning=False,use_time2vec=False).to(args.device)
+            self.classifier_optimizer = torch.optim.Adagrad(self.classifier.parameters(),5e-1)
+            self.model_gn = GradNet(31,[100,100], use_vgg=args.encoder).to(args.device)
+            self.optimizer_gn = torch.optim.Adam(self.model_gn.parameters(),5e-2)
+            self.classifier_loss_fn = reconstruction_loss
+            self.task = 'regression'
+            if args.encoder:
+                self.encoder = EncoderCNN().to(args.device)
+            else:
+                self.encoder = None
+
 
         if args.data == "sleep":
             self.dataset_kwargs = {"root_dir":"",}
@@ -417,14 +474,16 @@ class CrossGradTrainer():
             else:
                 self.encoder = None
 
-        # self.source_data_indices = json.load(open(data_index_file,"r")) #, allow_pickle=True)
-        self.source_data_indices = np.load(data_index_file, allow_pickle=True)
+        data_indices = json.load(open(data_index_file,"r")) #, allow_pickle=True)
+        # self.source_data_indices = np.load(data_index_file, allow_pickle=True)
+        self.source_data_indices = [data_indices[i] for i in self.source_domain_indices]
         self.cumulative_data_indices = get_cumulative_data_indices(self.source_data_indices)
+        self.target_indices = [data_indices[i] for i in self.target_domain_indices][0]  # TODO Flatten this list instead of picking 0th ele
         # self.target_indices = self.cumulative_data_indices[-1]
         # print(self.cumulative_data_indices)
         self.shuffle = True
         # self.data_shape = (-1,16,28,28)
-        self.cg_steps = 75
+        self.cg_steps = args.aug_steps
         self.device = args.device
         
 
@@ -441,10 +500,10 @@ class CrossGradTrainer():
         
         class_step = 0
         # for i in range(len(self.source_domain_indices)):
-            # if past_dataset is None:
-        past_data = ClassificationDataSet(self.dataset_kwargs['root_dir'], indices=self.source_data_indices[-1],**self.dataset_kwargs)
-        print(len(past_data))
-        past_dataset = torch.utils.data.DataLoader((past_data),self.BATCH_SIZE,True)
+        if past_dataset is None:
+            past_data = ClassificationDataSet(self.dataset_kwargs['root_dir'], indices=self.cumulative_data_indices[-1],**self.dataset_kwargs)
+            print(len(past_data))
+            past_dataset = torch.utils.data.DataLoader((past_data),self.BATCH_SIZE,True)
         for epoch in range(self.CLASSIFIER_EPOCHS):
             
             class_loss = 0
@@ -452,76 +511,100 @@ class CrossGradTrainer():
 
                 # batch_X = torch.cat([batch_X,batch_U.view(-1,2)],dim=1)
 
-                l = train_classifier_batch(X=batch_X,dest_u=batch_U,dest_a=batch_A,Y=batch_Y,classifier=self.classifier,classifier_optimizer=self.classifier_optimizer,verbose=False,encoder=encoder, batch_size=self.BATCH_SIZE)
+                l = train_classifier_batch(X=batch_X,dest_u=batch_U,dest_a=batch_A,Y=batch_Y,classifier=self.classifier,classifier_optimizer=self.classifier_optimizer,verbose=False,encoder=encoder, batch_size=self.BATCH_SIZE,loss_fn=self.classifier_loss_fn)
                 class_step += 1
                 class_loss += l
-            print("Epoch %d Loss %f"%(epoch,class_loss),flush=False)
+            print("Epoch %d Loss %f"%(epoch,class_loss/len(past_data)),flush=False)
+            # past_dataset = None
 
 
 
     def train_cross_grad(self):
+        log = open("cross-grad-log.txt","w")
 
-        for idx in range(1, len(self.source_domain_indices)):
+        for sub_ep in range(self.SUBEPOCHS):
+            for idx in range(1, len(self.source_domain_indices)):
 
-            source_indices = self.cumulative_data_indices[idx-1]
-            grad_target_indices =  self.source_data_indices[idx]
+                source_indices = self.cumulative_data_indices[idx-1]
+                grad_target_indices =  self.source_data_indices[idx]
 
-            data_set = self.DataSet(self.dataset_kwargs['root_dir'], source_indices=source_indices,target_indices=grad_target_indices,**self.dataset_kwargs) #RotMNISTCGrad(source_indices,grad_target_indices,BIN_WIDTH,src_indices[0]-1,6,src_indices[idx]-1)
-            print("Training Cross grad with {}".format(len(data_set)))
-            for epoch in range(int(self.EPOCH*(1+idx/4))):
-                
-                data = torch.utils.data.DataLoader(data_set,self.BATCH_SIZE,self.shuffle)
-                for img_1,img_2,time_diff in data:
-                    self.optimizer_gn.zero_grad()
-                    if self.encoder is not None:
-                        i1 = self.encoder(img_1)#.view(self.data_shape)
-                        i2 = self.encoder(img_2)#.view(self.data_shape)
-                    else:
-                        i1 = img_1 
-                        i2 = img_2
-                    # print(i1.size(),i2.size())
-                    time_diff_pred = self.model_gn(i1,i2)
-                    loss = ((time_diff.view(-1,1) - time_diff_pred.view(-1,1))**2).sum()
-                    loss.backward()
-                    self.optimizer_gn.step()
-                print('Epoch %d - %f' % (epoch, loss.detach().cpu().numpy()))
+            # source_indices = self.cumulative_data_indices[-1]
+            # grad_target_indices =  self.cumulative_data_indices[-1]
+                data_set = self.DataSet(self.dataset_kwargs['root_dir'], source_indices=source_indices,target_indices=grad_target_indices,**self.dataset_kwargs) #RotMNISTCGrad(source_indices,grad_target_indices,BIN_WIDTH,src_indices[0]-1,6,src_indices[idx]-1)
+                print("Training Cross grad with {}".format(len(data_set)))
+                for epoch in range(int(self.EPOCH*(1+idx / 8))):
+                    nl = 0
+                    ntd = 0
+                    data = torch.utils.data.DataLoader(data_set,self.BATCH_SIZE,self.shuffle)
+                    for img_1,img_2,time_diff in data:
+                        self.optimizer_gn.zero_grad()
+                        if self.encoder is not None:
+                            i1 = self.encoder(img_1)#.view(self.data_shape)
+                            i2 = self.encoder(img_2)#.view(self.data_shape)
+                        else:
+                            i1 = img_1 
+                            i2 = img_2
+                        # print(i1.size(),i2.size())
+                        time_diff_pred = self.model_gn(i1,i2)
+                        loss = torch.abs((time_diff.view(-1,1) - time_diff_pred.view(-1,1))).sum()
+                        loss.backward()
+                        self.optimizer_gn.step()
+                        with torch.no_grad():
+                            nl += loss.item()
+                            ntd += time_diff.sum().item()
+                    print('Epoch %d - %f %f' % (epoch, nl/len(data_set),ntd/len(data_set)))
+                    print('Epoch %d - %f %f \n' % (epoch, nl/len(data_set),ntd/len(data_set)),file=log)
+                    print(torch.cat([time_diff[:10].view(-1,1),time_diff_pred[:10].view(-1,1),i1[:10,0].view(-1,1),i1[:10,-1].view(-1,1),i2[:10,0].view(-1,1),i2[:10,-1].view(-1,1)],dim=1).detach().cpu().numpy(),file=log)
+                    # log.write("\n")
 
     def construct_final_dataset(self):
 
+        if self.data == "house":
+            self.dataset_kwargs["drop_cols_classifier"] = self.dataset_kwargs["drop_cols"]
         self.final_dataset = []
-        past_data = torch.utils.data.DataLoader(ClassificationDataSet(self.dataset_kwargs['root_dir'], indices=self.cumulative_data_indices[len(self.source_domain_indices)-1],**self.dataset_kwargs),self.BATCH_SIZE,shuffle=False,drop_last=True) 
-        time = self.target_u
+        past_data = torch.utils.data.DataLoader(ClassificationDataSet(self.dataset_kwargs['root_dir'], indices=self.source_data_indices[len(self.source_domain_indices)-1],**self.dataset_kwargs),self.BATCH_SIZE,shuffle=False,drop_last=True) 
+        time = self.target_a
         new_images = []
         new_labels = []
         for img,a,u,label in past_data:
             # new_img = torch.zeros_like(img).normal_(0.,1.)
             new_img = img.clone().detach()
             new_img.requires_grad = True
-            optim = torch.optim.SGD([new_img],lr=1e-3)
-            if self.encoder is not None:
-                i1 = self.encoder(img)#.view(self.data_shape)
-                i2 = self.encoder(new_img)#.view(self.data_shape)
-            else:
-                i1 = img 
-                i2 = new_img
+            # optim = torch.optim.SGD([new_img],lr=1e-3)
+            with torch.no_grad():
+                if self.encoder is not None:
+                    i1 = self.encoder(img)#.view(self.data_shape)
+                    i2 = self.encoder(new_img)#.view(self.data_shape)
+                else:
+                    i1 = img 
+                    i2 = new_img
+            i2.requires_grad = True
+            optim = torch.optim.SGD([i2], lr=5, momentum=0.9)
             for s in range(self.cg_steps):
-                loss = ((self.model_gn(i1,i2) - (u-time).view(-1,1))**2).sum()
-                grad = torch.autograd.grad(loss,i2)
-                print('Step %d - %f' % (s, loss.detach().cpu().numpy()),flush=True,end='\r')
-                with torch.no_grad():
-                    i2 = i2 - 1e-1*grad[0].data
-                    i2 = i2.detach().clone()
-                    i2.requires_grad = True
+                optim.zero_grad()
+                loss = ((self.model_gn(i1,i2) - (a-time).view(-1,1))**2).sum()
+                loss.backward()
+                # grad = torch.autograd.grad(loss,i2)
+                print('Step %d - %f, %f , %f' % (s, loss.detach().cpu().numpy(), self.model_gn(i1,i2).detach().sum().cpu().numpy(), (a-time).view(-1,1).sum().cpu().detach()),flush=True,end='\r')
+                # with torch.no_grad():
+                #   i2 = i2 - 7.5*grad[0].data
+                #   i2 = i2.detach().clone()
+                #   i2.requires_grad = True
+                optim.step()
             new_images.append(i2.detach().cpu().numpy())
             new_labels.append(label.view(-1,1).detach().cpu().numpy())
+            print(torch.cat([img[:5,:1],img[:5,-3:],i2[:5,:1],i2[:5,-3:]],dim=-1).detach().cpu().numpy())
         new_ds_x, new_ds_y = np.vstack(new_images), np.vstack(new_labels)
         new_ds_u = np.hstack([np.array([time]*len(new_ds_x)).reshape(-1,1),np.array([self.target_u]*len(new_ds_x)).reshape(-1,1)])
         print("Finetune with len {}".format(len(new_ds_x)))
-        self.classification_dataset = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(new_ds_x).float().to(self.device),torch.tensor(new_ds_u[:,0]).float().view(-1,1).to(self.device),torch.tensor(new_ds_u[:,1]).view(-1,1).float().to(self.device),
+        self.classification_dataset = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(torch.tensor(np.hstack([new_ds_x,new_ds_u])).float().to(self.device),torch.tensor(new_ds_u[:,0]).float().view(-1,1).to(self.device),torch.tensor(new_ds_u[:,1]).view(-1,1).float().to(self.device),
              torch.tensor(new_ds_y).long().to(self.device)),self.CLASSIFICATION_BATCH_SIZE,self.shuffle)
 
 
     def eval_classifier(self):
+        # TODO change for handling regression
+        if self.data == "house":
+            self.dataset_kwargs["drop_cols_classifier"] = None
         td = ClassificationDataSet(self.dataset_kwargs['root_dir'], indices=self.target_indices,**self.dataset_kwargs)
         target_dataset = torch.utils.data.DataLoader(td,self.BATCH_SIZE,self.shuffle,drop_last=False)
         Y_pred = []
@@ -530,29 +613,122 @@ class CrossGradTrainer():
             batch_U = batch_U.view(-1,1)
             if self.encoder is not None:
                 batch_X = self.encoder(batch_X)
-            batch_Y_pred = self.classifier(batch_X, batch_U).detach().cpu().numpy()
-            Y_pred = Y_pred + [np.argmax(batch_Y_pred,axis=1)]
-            Y_label = Y_label + [batch_Y.detach().cpu().numpy()]
+            batch_Y_pred = self.classifier(batch_X, batch_A).detach().cpu().numpy()
+            # print(batch_Y_pred.shape)
+            if self.task == 'classification':
+                Y_pred = Y_pred + [np.argmax(batch_Y_pred,axis=1)]
+                Y_label = Y_label + [batch_Y.detach().cpu().numpy()]
+            elif self.task == 'regression':
+                Y_pred = Y_pred + [batch_Y_pred.reshape(-1,1)]
+                Y_label = Y_label + [batch_Y.detach().cpu().numpy().reshape(-1,1)]
         print(len(Y_pred),len(Y_label))
         # print(Y_pred[0].shape,Y_label[0].shape)
-        Y_pred = np.hstack(Y_pred)
-        Y_label = np.hstack(Y_label)
-        print('shape: ',Y_pred.shape)
-        print(accuracy_score(Y_label, Y_pred))
-        print(confusion_matrix(Y_label, Y_pred))
-        print(classification_report(Y_label, Y_pred))    
+        if self.task == 'classification':
+            Y_pred = np.hstack(Y_pred)
+            Y_label = np.hstack(Y_label)
+            print('shape: ',Y_pred.shape)
+            print(accuracy_score(Y_label, Y_pred))
+            print(confusion_matrix(Y_label, Y_pred))
+            print(classification_report(Y_label, Y_pred))    
+        else:
+            Y_pred = np.vstack(Y_pred)
+            Y_label = np.vstack(Y_label)
+            print('MAE: ',np.mean(np.abs(Y_label-Y_pred),axis=0))
+            print('MSE: ',np.mean((Y_label-Y_pred)**2,axis=0))
 
 
 
+
+    '''
+    
+    The next three functions were a sanity check to see if classifiers could act as good predictors
+    '''
+
+
+    def train_classifier_sanity_check(self,j=[0,1,2,3,4]):
+        self.sane_classifiers = [ClassifyNet(30,[10,2],1,time_conditioning=False,use_time2vec=False).to(self.device) for _ in range(len(self.source_domain_indices))]
+        self.sane_classifier_optimizer = [torch.optim.Adam(self.sane_classifiers[i].parameters(),5e-2) for i in range(len(self.source_domain_indices))]
+        self.dataset_kwargs["drop_cols_classifier"] = self.dataset_kwargs["drop_cols"]
+        for i in range(len(self.source_domain_indices)):
+            past_data = ClassificationDataSet(self.dataset_kwargs['root_dir'], indices=self.source_data_indices[i],**self.dataset_kwargs)
+            # print(len(past_data))
+            past_dataset = torch.utils.data.DataLoader((past_data),self.BATCH_SIZE,True)
+
+            for epoch in range(self.CLASSIFIER_EPOCHS):
+                
+                class_loss = 0
+                for batch_X, batch_A, batch_U, batch_Y in tqdm(past_dataset):
+
+                    # batch_X = torch.cat([batch_X,batch_U.view(-1,2)],dim=1)
+
+                    l = train_classifier_batch(X=batch_X,dest_u=None,dest_a=None,Y=batch_Y,classifier=self.sane_classifiers[i],classifier_optimizer=self.sane_classifier_optimizer[i],verbose=False,encoder=None, batch_size=self.BATCH_SIZE,loss_fn=self.classifier_loss_fn)
+                    class_loss += l
+                print("Domain %d Loss %f"%(i,class_loss/len(past_data)),flush=False)
+
+            torch.save(self.sane_classifiers[i].state_dict(), "sanity_check_{}".format(i))
+
+
+    def get_sane_time_diff(self,i1,i2):
+        i1_lab = i1[:,-1]
+        i2_lab = i2[:,-1]
+        preds_i1 = torch.zeros(i1.size(0),len(self.source_domain_indices))
+        preds_i2 = torch.zeros(i1.size(0),len(self.source_domain_indices))
+
+        for i in range(len(self.source_domain_indices)):
+            # print(self.sane_classifiers[i](i1[:,:-1]).size(),i1_lab.size())
+            # print(torch.cat([self.sane_classifiers[i](i1[:10,:-1]).view(-1,1),i1_lab[:10].view(-1,1)],dim=1))
+            preds_i1[:,i] = torch.abs(self.sane_classifiers[i](i1[:,:-1]) - i1_lab.view(-1,1)).squeeze(1) 
+            preds_i2[:,i] = torch.abs(self.sane_classifiers[i](i2[:,:-1]) - i2_lab.view(-1,1)).squeeze(1)
+
+        preds_i1 = preds_i1.argmin(dim=1).view(-1,1)
+        preds_i2 = preds_i2.argmin(dim=1).view(-1,1)
+
+        time_diffs = (torch.tensor(self.source_domain_indices)/12.0).repeat(i1.size(0),1).float()
+        return 10*(torch.gather(time_diffs,1,preds_i1) - torch.gather(time_diffs,1,preds_i2)).to(self.device)
+
+
+    def eval_sane_classifiers(self):
+        log = open("cross-grad-log.txt","w")
+        self.sane_classifiers = [ClassifyNet(30,[10,2],1,time_conditioning=False,use_time2vec=False).to(self.device) for _ in range(len(self.source_domain_indices))]
+        for i in range(len(self.source_domain_indices)):
+            self.sane_classifiers[i].load_state_dict(torch.load("sanity_check_{}".format(i)))
+
+        for idx in range(1, len(self.source_domain_indices)):
+
+            source_indices = self.cumulative_data_indices[idx-1]
+            grad_target_indices =  self.source_data_indices[idx]
+
+            data_set = self.DataSet(self.dataset_kwargs['root_dir'], source_indices=source_indices,target_indices=grad_target_indices,**self.dataset_kwargs) #RotMNISTCGrad(source_indices,grad_target_indices,BIN_WIDTH,src_indices[0]-1,6,src_indices[idx]-1)
+            nl = 0
+            ntd = 0
+            data = torch.utils.data.DataLoader(data_set,self.BATCH_SIZE,self.shuffle)
+            for img_1,img_2,time_diff in data:
+                if self.encoder is not None:
+                    i1 = self.encoder(img_1)#.view(self.data_shape)
+                    i2 = self.encoder(img_2)#.view(self.data_shape)
+                else:
+                    i1 = img_1 
+                    i2 = img_2
+                # print(i1.size(),i2.size())
+                time_diff_pred = self.get_sane_time_diff(i1,i2)
+                loss = torch.abs((time_diff.view(-1,1) - time_diff_pred.view(-1,1))).sum()
+                with torch.no_grad():
+                    nl += loss.item()
+                    ntd += time_diff.sum().item()
+            print('Epoch %d - %f %f' % (1, nl/len(data_set),ntd/len(data_set)))
+            print('Epoch %d - %f %f \n' % (1, nl/len(data_set),ntd/len(data_set)),file=log)
+            print(torch.cat([time_diff[10:40].view(-1,1),time_diff_pred[10:40].view(-1,1)],dim=1).detach().cpu().numpy(),file=log)
     def train(self):
 
         # print(self.encoder)
         
         self.train_classifier(encoder=self.encoder)  # Train classifier initially
-        # self.train_cross_grad()  # Train model for cross-grad
-        # self.construct_final_dataset()  # Perturb source dataset for finetuning
-        # self.CLASSIFIER_EPOCHS = self.CLASSIFIER_EPOCHS//2
-        # self.train_classifier(self.classification_dataset)  
+        self.eval_classifier()
+        self.train_cross_grad()  # Train model for cross-grad
+        
+        self.construct_final_dataset()  # Perturb source dataset for finetuning
+        self.CLASSIFIER_EPOCHS = self.CLASSIFIER_EPOCHS//2
+        self.train_classifier(self.classification_dataset)  
         self.eval_classifier()
 
 '''Game plan

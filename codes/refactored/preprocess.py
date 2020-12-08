@@ -6,15 +6,17 @@ import pandas as pd
 import numpy as np
 import math
 
-from sklearn.datasets import make_classification, make_moons
-from torchvision.transforms.functional import rotate
-from torchvision.datasets.folder import  has_file_allowed_extension, is_image_file, IMG_EXTENSIONS, pil_loader, accimage_loader,default_loader
+from datetime import datetime
+
+# from sklearn.datasets import make_classification, make_moons
+# from torchvision.transforms.functional import rotate
+# from torchvision.datasets.folder import  has_file_allowed_extension, is_image_file, IMG_EXTENSIONS, pil_loader, accimage_loader,default_loader
 from tqdm import tqdm 
 
-import torch
+# import torch
 import os
 import json
-from PIL import Image
+# from PIL import Image
 from utils import *
 
 MOON_SAMPLES = 200
@@ -217,3 +219,69 @@ def load_comp_cars(root_dir="../../data/CompCars", text_file="../../data/CompCar
     json.dump(indices,open("{}/indices.json".format(root_dir),"w"))
     print(f"FAILED ON {failed}")
 # load_comp_cars()
+
+def load_house_price(root_dir="../../data/HousePrice", text_file="../../data/HousePrice/raw_sales.csv"):
+    all_X = []
+    all_labels = []
+    # all_U = []
+    # all_A = []
+    indices = {} 
+    failed = 0
+
+    df = pd.read_csv(text_file)
+    # print(len(pd.unique(df['postcode'])))
+    onehot = pd.get_dummies(df.postcode)
+    df = df.drop("postcode",axis=1)
+    df = df.join(onehot)
+
+    onehot = pd.get_dummies(df.propertyType)
+    df = df.drop("propertyType",axis=1)
+    df = df.join(onehot)
+
+    # pd.to_datetime(df["datesold"])
+    df = df.join(df.datesold.apply(lambda x:pd.to_datetime(x).timestamp()),rsuffix='stamp').drop("datesold",axis=1) #, axis=1)
+
+    df = df.sort_values(by='datesoldstamp')
+
+    # testtime = 1546300800 - 1.170806e+09
+
+    # train  = df.loc[df["datesoldstamp"]<testtime,:]
+    # test = df.loc[df["datesoldstamp"]>testtime,:]
+
+    # label = train["price"]
+    # data = train.loc[:, train.columns != 'price']
+    data = df.to_numpy()
+    for idx,row in enumerate(data):
+        all_labels.append(row[0]/10000)
+        u = int(datetime.fromtimestamp(int(row[-1])).year)
+        all_X.append(np.array(row[1:].tolist()+[u]))
+        # all_U.append(u)
+        # all_A.append(row[-1])     
+        if u in indices:
+            indices[u].append(idx)
+        else:
+            indices[u] = [idx]
+    print(idx)
+    all_X = np.stack(all_X)
+    print(all_X)
+    all_X = all_X - all_X.min(axis=0).reshape((1,-1))
+    all_X = all_X / all_X.max(axis=0).reshape((1,-1))
+    all_U = all_X[:,-1]
+    all_A = all_X[:,-2]
+    new_ind = []
+    for i in [2007,2008,2009,2010,2011,2012,2013,2014,2015,2016,2017,2018,2019]:
+        print(len(indices[i]))
+        new_ind.append(indices[i])
+    # print(new_ind[-1][-1])
+    # print(all_X,all_U,all_A)
+    np.save("{}/X.npy".format(root_dir),all_X,allow_pickle=True)
+    np.save("{}/Y.npy".format(root_dir),all_labels,allow_pickle=True)
+    np.save("{}/A.npy".format(root_dir),all_A,allow_pickle=True)
+    np.save("{}/U.npy".format(root_dir),all_U,allow_pickle=True)
+    # print(new_ind)
+    json.dump(new_ind,open("{}/indices.json".format(root_dir),"w"))
+    # print(len(new_ind))
+
+if __name__ == '__main__':
+    
+    load_house_price()

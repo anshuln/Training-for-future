@@ -5,6 +5,11 @@ from torchvision import models as tv_models
 
 DEVICE = "cuda:0"
 
+def init_weights(m):
+    if type(m) == nn.Linear:
+        nn.init.xavier_normal_(m.weight, gain=1.0)
+        # m.bias.data.fill_(0.01)
+
 class TimeReLU(nn.Module):
 
 	"""
@@ -29,12 +34,14 @@ class TimeReLU(nn.Module):
 
 	def forward(self, X, times):
 
+		if len(times.size()) == 3:
+			times = times.squeeze(2)
+
 		thresholds = self.model(times)
 		orig_shape = X.size()
 		# print(orig_shape)
 		X = X.view(orig_shape[0],-1)
-		if len(times.size()) == 3:
-			times = times.squeeze(2)
+		# print(X.size(),thresholds.size())
 		# print(X.size(),times.size(),thresholds.size())
 
 		if self.leaky:
@@ -109,7 +116,7 @@ class Encoder(nn.Module):
 
 			self.layers.append(nn.Linear(self.input_shape, self.hidden_shapes[0]))
 			self.relus.append(nn.LeakyReLU())
-
+			# self.relus.append(TimeReLU())
 			for i in range(len(self.hidden_shapes) - 1):
 
 				self.layers.append(nn.Linear(self.hidden_shapes[i], self.hidden_shapes[i+1]))
@@ -166,7 +173,13 @@ class ClassifyNet(nn.Module):
 		self.time_conditioning = kwargs['time_conditioning'] if kwargs.get('time_conditioning') else False
 		if self.time_conditioning:
 			self.leaky = kwargs['leaky'] if kwargs.get('leaky') else False
-			self.use_time2vec = kwargs['use_time2vec'] if kwargs.get('use_time2vec') else False
+		use_time2vec = kwargs['use_time2vec'] if kwargs.get('use_time2vec') else False
+		if use_time2vec:
+			self.time_shape = 8
+			self.time2vec = Time2Vec(1,8)
+		else:
+			self.time_shape = 1
+			self.time2vec = None
 
 		self.layers = nn.ModuleList()
 		self.relus = nn.ModuleList()
@@ -178,28 +191,50 @@ class ClassifyNet(nn.Module):
 		if len(self.hidden_shapes) == 0:
 
 			self.layers.append(nn.Linear(input_shape, output_shape))
-			self.relus.append(nn.LeakyReLU())
+			if self.time_conditioning:
+				self.relus.append(TimeReLU(data_shape=output_shape,time_shape=self.time_shape))
+			else:
+				self.relus.append(nn.LeakyReLU())
 
 		else:
 
 			self.layers.append(nn.Linear(self.input_shape, self.hidden_shapes[0]))
-			self.relus.append(nn.LeakyReLU())
+			if self.time_conditioning:
+				self.relus.append(TimeReLU(data_shape=self.hidden_shapes[0],time_shape=self.time_shape))
+			else:
+				self.relus.append(nn.LeakyReLU())
 
 			for i in range(len(self.hidden_shapes) - 1):
 
 				self.layers.append(nn.Linear(self.hidden_shapes[i], self.hidden_shapes[i+1]))
-				self.relus.append(nn.LeakyReLU())
+				if self.time_conditioning:
+					self.relus.append(TimeReLU(data_shape=self.hidden_shapes[i+1],time_shape=self.time_shape))
+				else:
+					self.relus.append(nn.LeakyReLU())
 
-			self.layers.append(nn.Linear(self.output_shape, self.hidden_shapes[-1]))
-			self.relus.append(nn.LeakyReLU())
+			self.layers.append(nn.Linear(self.hidden_shapes[-1],self.output_shape))
+			if self.time_conditioning:
+				self.relus.append(TimeReLU(data_shape=output_shape,time_shape=self.time_shape))
+			else:
+				self.relus.append(nn.LeakyReLU())
+		self.apply(init_weights)
+
 
 	def forward(self, X, times = None):
-		
+		if self.time2vec is not None:
+			times = self.time2vec(times)
+
 		for i in range(len(self.layers)):
 
-			X = self.relus[i](self.layers[i](X))
+			X = self.layers[i](X)
+			# print(self.relus[i])
+			if self.time_conditioning:
+				X = self.relus[i](X,times)
+			else:
+				X = self.relus[i](X)
 
-		X = nn.sigmoid(X)
+
+		X = torch.relu(X)
 
 		return X
 
@@ -212,8 +247,8 @@ class ClassifyNetCNN(nn.Module):
 
 		# self.time_conditioning = kwargs['time_conditioning'] if kwargs.get('time_conditioning') else False
 		# if self.time_conditioning:
-		# 	self.leaky = kwargs['leaky'] if kwargs.get('leaky') else False
-		# 	self.use_time2vec = kwargs['use_time2vec'] if kwargs.get('use_time2vec') else False
+		#   self.leaky = kwargs['leaky'] if kwargs.get('leaky') else False
+		#   self.use_time2vec = kwargs['use_time2vec'] if kwargs.get('use_time2vec') else False
 		self.time_conditioning = time_conditioning
 		self.append_time = append_time
 		self.encode_time = encode_time
@@ -227,11 +262,11 @@ class ClassifyNetCNN(nn.Module):
 		if use_vgg:
 			in_channels = 16
 		else:
-			in_channels = 1	
+			in_channels = 1 
 		# if len(self.hidden_shapes) == 0:
 
-		# 	self.layers.append(nn.Linear(input_shape, output_shape))
-		# 	self.relus.append(nn.LeakyReLU())
+		#   self.layers.append(nn.Linear(input_shape, output_shape))
+		#   self.relus.append(nn.LeakyReLU())
 
 		if time2vec:
 			self.time2vec = Time2Vec(1, 8)
@@ -241,17 +276,17 @@ class ClassifyNetCNN(nn.Module):
 			self.time_dim = 1
 
 		self.flat = nn.Flatten()
-		self.layer_0 = nn.Conv2d(in_channels=in_channels, out_channels=8, kernel_size=3)
-		self.relu_0    = TimeReLU(13*13*8,self.time_dim,leaky)
+		self.layer_0 = nn.Conv2d(in_channels=in_channels, out_channels=16, kernel_size=3)
+		self.relu_0    = TimeReLU(13*13*8*2,self.time_dim,leaky)
 		# self.relu_0 = nn.ReLU()
 		if time_conditioning:
-			self.layer_1 = nn.Conv2d(in_channels=8, out_channels=16, kernel_size=3)
-			self.layer_2 = nn.Conv2d(in_channels=16, out_channels=32, kernel_size=3)
-			self.relu_1 = TimeReLU(200*2,self.time_dim,leaky)
-			self.relu_2 = TimeReLU(72*4,self.time_dim,leaky)
+			self.layer_1 = nn.Conv2d(in_channels=16, out_channels=64, kernel_size=3)
+			self.layer_2 = nn.Conv2d(in_channels=64, out_channels=128, kernel_size=3)
+			self.relu_1 = TimeReLU(200*8,self.time_dim,leaky)
+			self.relu_2 = TimeReLU(72*16,self.time_dim,leaky)
 			# self.relu_t = nn.ReLU()
 		self.down_sampling = nn.MaxPool2d(kernel_size=2, stride=2)
-		self.out_layer = nn.Linear(72*4,n_classes)
+		self.out_layer = nn.Linear(72*16,n_classes)
 		self.out_relu = TimeReLU(n_classes,self.time_dim,leaky)
 
 
@@ -294,7 +329,8 @@ class GradNet(nn.Module):
 		
 		super(GradNet,self).__init__()
 
-		self.layers = nn.ModuleList()
+		self.layers_1 = nn.ModuleList()
+		self.layers_2 = nn.ModuleList()
 		self.relus = nn.ModuleList()
 
 		self.input_shape = data_shape
@@ -308,37 +344,104 @@ class GradNet(nn.Module):
 		elif self.loss_type == 'cosine':
 			self.output_shape = kwargs['time_dim'] if kwargs['time_dim'] else 8 # raise some error here
 	
-		# if len(self.hidden_shapes) == 0:
+		if len(self.hidden_shapes) == 0:
 
-		# 	self.layers.append(nn.Linear(input_shape, output_shape))
-		# 	self.relus.append(nn.LeakyReLU())
+		  self.layers_1.append(nn.Linear(input_shape, output_shape))
+		  self.layers_2.append(nn.Linear(input_shape, output_shape))
+		  self.relus.append(nn.LeakyReLU())
 			
-		# else:
+		else:
 
-		# 	self.layers.append(nn.Linear(self.input_shape, self.hidden_shapes[0]))
-		# 	self.relus.append(nn.LeakyReLU())
+		  self.layers_1.append(nn.Linear(self.input_shape, self.hidden_shapes[0]))
+		  self.layers_2.append(nn.Linear(self.input_shape, self.hidden_shapes[0]))
+		  self.relus.append(nn.LeakyReLU())
 
-		# 	for i in range(len(self.hidden_shapes) - 1):
+		  for i in range(len(self.hidden_shapes) - 1):
 
-		# 		self.layers.append(nn.Linear(self.hidden_shapes[i], self.hidden_shapes[i+1]))
-		# 		self.relus.append(nn.LeakyReLU())
+			  self.layers_1.append(nn.Linear(self.hidden_shapes[i], self.hidden_shapes[i+1]))
+			  self.layers_2.append(nn.Linear(self.hidden_shapes[i], self.hidden_shapes[i+1]))
+			  self.relus.append(nn.LeakyReLU())
 
-		# 	self.layers.append(nn.Linear(2*self.hidden_shapes[-1], self.hidden_shapes[-1]))
-		# 	self.layers.append(nn.Linear(self.hidden_shapes[-1], self.output_shape))
-		# 	self.relus.append(nn.LeakyReLU())
-		# 	self.relus.append(nn.LeakyReLU())
+		  self.layers_1.append(nn.Linear(2*self.hidden_shapes[-1], self.hidden_shapes[-1]))
+		  self.layers_1.append(nn.Linear(self.hidden_shapes[-1], 1))
+		  self.relus.append(nn.LeakyReLU())
+		  self.relus.append(nn.LeakyReLU())
 
 
 	def forward(self, X1, X2):
 
 		# Distinct part
 
-		for i in range(len(self.layers-2)):
+		for i in range(len(self.layers_2)):
 
-			X1 = self.relus[i](self.layers[i](X1))
-			X2 = self.relus[i](self.layers[i](X2))
+			X1 = self.relus[i](self.layers_1[i](X1))
+			X2 = self.relus[i](self.layers_2[i](X2))
 		# Common part
 
-		X = self.relus[-1](self.layers[-1](self.relus[-2](self.layers[-2](torch.cat([X1 ,X2])))))
+		X = (self.layers_1[-1](self.relus[-2](self.layers_1[-2](torch.cat([X1 ,X2],dim=-1)))))
 		return X
 		
+
+class GradNetCNN(nn.Module):
+	def __init__(self,data_shape, hidden_shape, time_conditioning=True,leaky=False,use_vgg=False):
+		super(GradNetCNN,self).__init__()
+
+		if use_vgg:
+			in_channels = 16
+		else:
+			in_channels = 1
+
+		# self.time_encodings = TimeEncodings(data_shape,1)
+		self.layer_0 = nn.Conv2d(in_channels=in_channels,out_channels=32,kernel_size=3)
+		self.relu_0    = nn.LeakyReLU()
+		# self.relu_0 = nn.ReLU()
+		# if time_conditioning:
+		self.layer_1 = nn.Conv2d(in_channels=32,out_channels=64,kernel_size=3)
+		self.layer_2 = nn.Conv2d(in_channels=64,out_channels=128,kernel_size=3)
+			# self.layer_2 = nn.Linear(hidden_shape,hidden_shape)
+			# self.relu_t = nn.LeakyReLU()
+		self.relu_t = nn.ReLU()
+		self.down_sampling = nn.MaxPool2d(kernel_size=2, stride=2)
+		self.out_layer = nn.Linear(3200*2,1)
+		self.out_relu = nn.LeakyReLU()
+
+	def forward(self,X1,X2):
+		# times = X[:,-1:]
+		# X = self.time_encodings(X)
+		# print(X1.size())
+		if len(X1.size()) < 4:
+			X1 = X1.unsqueeze(1)
+		if len(X2.size()) < 4:
+			X2 = X2.unsqueeze(1)
+		X1  = self.layer_0(X1)
+		X1  = self.relu_0(X1)
+
+		# if self.time_conditioning:
+		X1 = self.layer_1(X1)
+		X1 = self.relu_t(X1)
+		X1 = self.down_sampling(X1)
+		X1 = self.layer_2(X1)
+		X1 = self.relu_t(X1)
+
+		X1 = self.down_sampling(X1)
+		# X1 = self.layer_2(X1)
+		# X1 = self.relu_t(X1)
+
+		X2  = self.layer_0(X2)
+		X2  = self.relu_0(X2)
+
+		# if self.time_conditioning:
+		X2 = self.layer_1(X2)
+		X2 = self.relu_t(X2)
+		X2 = self.down_sampling(X2)
+		X2 = self.layer_2(X2)
+		X2 = self.relu_t(X2)
+		X2 = self.down_sampling(X2)
+		# X2 = self.layer_2(X2)
+		# X2 = self.relu_t(X2)
+		# print(X1.size())
+		X = self.out_layer(torch.cat([X1.view(X1.size(0),-1),X2.view(X1.size(0),-1)],dim=-1))
+		# X = self.out_relu(X)
+		# X = torch.softmax(X,dim=1)
+
+		return X
