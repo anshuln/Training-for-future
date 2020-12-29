@@ -599,6 +599,38 @@ class CrossGradTrainer():
 
 		# Initialize models here
 
+	def get_curric_index_pairs(self,idx):
+		'''Returns pairs for training ordinal classifier such that first you train on easier examples and increase complexity 
+		
+		source is a list of indices
+		tgt is a list of lists
+		mapping is a dict of each `idx` according to dataloader to one of the lists of tgt
+		
+		Arguments:
+			idx {[type]} -- [description]
+		
+		Returns:
+			[type] -- [description]
+		'''
+		source = []
+		tgt = []
+		map_curric = []
+		counter  = 0
+		total_ex = 0
+
+		total_len = len(self.source_domain_indices)
+		for i in range(1,idx+1):
+			# This outer loop is so that we do not have catastrophic forgetting
+			for j in range(i):
+				source += self.source_data_indices[j]
+				tgt.append(self.source_data_indices[j + (total_len - i)])
+				map_curric += ([(x+total_ex,counter) for x in range(len(self.source_data_indices[j]))])
+				counter += 1
+				total_ex += len(self.source_data_indices[j])
+
+		return source, tgt, dict(map_curric)
+
+
 	def train_classifier(self,past_dataset=None,encoder=None):
 		
 		class_step = 0
@@ -629,14 +661,14 @@ class CrossGradTrainer():
 		for sub_ep in range(self.SUBEPOCHS):
 			for idx in range(1, len(self.source_domain_indices)):
 
-				source_indices = self.cumulative_data_indices[idx-1]
-				grad_target_indices =  self.cumulative_data_indices[idx]
-
+				source_indices, grad_target_indices, map_index_curric = self.get_curric_index_pairs(idx)
+				# print(source_indices,grad_target_indices)
 			# source_indices = self.cumulative_data_indices[-1]
 			# grad_target_indices =  self.cumulative_data_indices[-1]
+				self.dataset_kwargs['map_index_curric'] = map_index_curric
 				data_set = self.DataSet(self.dataset_kwargs['root_dir'], source_indices=source_indices,target_indices=grad_target_indices,**self.dataset_kwargs) #RotMNISTCGrad(source_indices,grad_target_indices,BIN_WIDTH,src_indices[0]-1,6,src_indices[idx]-1)
 				# print("Training Cross grad with {}".format(len(data_set)))
-				print("Transforming to {} domain".format(idx))
+				print("Transforming to {} domain with {} ex".format(idx,len(data_set)))
 				for epoch in range(int(self.EPOCH*(1+idx / 8))):
 					nl = 0
 					ntd = 0
@@ -694,13 +726,15 @@ class CrossGradTrainer():
 		self.lr = np.max(1 - (acc/(var_act + 1e-15)), 0)   # * (var_pred / (var_act + 1e-15))
 
 		print(self.lr)
+
+
 	def construct_final_dataset(self):
 
 		if self.data == "house":
 			self.dataset_kwargs["drop_cols_classifier"] = self.dataset_kwargs["drop_cols"]
 		self.final_dataset = []
 		past_data = torch.utils.data.DataLoader(ClassificationDataSet(indices=self.source_data_indices[len(self.source_domain_indices)-1],**self.dataset_kwargs),self.BATCH_SIZE,shuffle=False,drop_last=True) 
-		time = self.target_a
+		time = self.target_a - 1 + self.lr
 		new_images = []
 		new_labels = []
 		for img,a,u,label in past_data:
@@ -719,7 +753,7 @@ class CrossGradTrainer():
 					# i2 = torch.cat([new_img,label.view(-1,1).clone().detach().float()],dim=1)
 			i2.requires_grad = True
 			optim = torch.optim.SGD([i2], lr=0.5, momentum=0.9)
-			for s in range(5) : #max(int(self.cg_steps*self.lr),1)):
+			for s in range(max(int(self.cg_steps*self.lr),1)):
 				optim.zero_grad()
 				tgt = ((a-time)>0)*1.0 if self.dataset_kwargs['return_binary'] else a - time
 				loss = self.ord_class_loss_fn(self.model_gn(i1,i2) , tgt.view(-1,1)).sum()

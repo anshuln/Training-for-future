@@ -120,17 +120,26 @@ class GradDataset(torch.utils.data.Dataset):
 		self.append_label = kwargs['append_label'] if kwargs.get('append_label') else False
 		self.label_dict_func = kwargs['label_dict_func'] if kwargs.get('label_dict_func') else lambda x: int(x)
 		self.return_binary   = kwargs['return_binary'] if kwargs.get('return_binary') else False
+		self.map_index_curric = kwargs['map_index_curric'] if kwargs.get('map_index_curric') else dict([(i,0) for i in range(len(self.src_indices))])
+		if isinstance(self.target_indices[0],int):
+			self.target_indices = [self.target_indices]
+
 		self.target_bin = target_bin
 
 		# print(self.bins,self.bin_width)
 		# print("---------- READING MNIST ----------")
 		if self.rand_target == False:
-			for i in self.target_indices:
-			  if self.label_dict_func(self.Y[i].item()) not in self.target_labs.keys():
-				  self.target_labs[self.label_dict_func(self.Y[i].item())] = [i]
-			  else:
-				  self.target_labs[self.label_dict_func(self.Y[i].item())].append(i)
-
+			for idx,l in enumerate(self.target_indices):
+				print(idx)
+				for i in l:
+					if self.label_dict_func(self.Y[i].item()) not in self.target_labs.keys():
+						self.target_labs[self.label_dict_func(self.Y[i].item())] = {idx : [i]}
+					elif idx not in self.target_labs[self.label_dict_func(self.Y[i].item())].keys():
+						self.target_labs[self.label_dict_func(self.Y[i].item())][idx] = [i]
+					else:
+						self.target_labs[self.label_dict_func(self.Y[i].item())][idx].append(i)
+		# for k in self.target_labs:
+		# 	print(self.target_labs[k].keys())
 	def __getitem__(self, idx):
 		
 		index = self.src_indices[idx]
@@ -140,13 +149,13 @@ class GradDataset(torch.utils.data.Dataset):
 		a_info = torch.tensor(self.A[index]).float()
 		
 		if self.rand_target:
-			target_idx = np.random.randint(idx,len(self.target_indices))#idx % len(self.target_indices)
-			target_idx = self.target_indices[target_idx]
+			target_idx = np.random.randint(idx,len(self.target_indices[self.map_index_curric[idx]]))#idx % len(self.target_indices)
+			target_idx = self.target_indices[self.map_index_curric[idx]][target_idx]
 		else:
 			try:
-				target_ids = self.target_labs[self.label_dict_func(label.item())]
+				target_ids = self.target_labs[self.label_dict_func(label.item())][self.map_index_curric[idx]]
 			except KeyError:
-				target_ids = self.target_labs[get_closest(list(self.target_labs.keys()),self.label_dict_func(label.item()))] 
+				target_ids = self.target_labs[get_closest(list([k for k in self.target_labs.keys() if self.map_index_curric[idx] in self.target_labs[k].keys()]),self.label_dict_func(label.item()))][self.map_index_curric[idx]] 
 			target_idx = target_ids[np.random.randint(0,len(target_ids))]
 
 		# target_idx = self.target_indices
