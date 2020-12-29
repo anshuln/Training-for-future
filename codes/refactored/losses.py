@@ -3,16 +3,16 @@
 '''
 import torch
 
-def classification_loss(Y_pred, Y, n_classes=10):
+def classification_loss(Y_pred, Y):
 	# print(Y_pred)
 	# print(Y.shape,Y_pred.shape)
 	Y_new = torch.zeros_like(Y_pred)
-	Y_new = Y_pred.scatter(1,Y.view(-1,1),1.0)
+	Y_new = Y_new.scatter(1,Y.view(-1,1),1.0)
 	# print(Y_new * torch.log(Y_pred+ 1e-15))
 	return  -1.*torch.sum((Y_new * torch.log(Y_pred+ 1e-15)),dim=1)
 
 def bxe(real, fake):
-	return -1.*((real*torch.log(fake+ 1e-5)) + ((1-real)*torch.log(1-fake + 1e-5)))
+	return -1.*((real*torch.log(fake+ 1e-15)) + ((1-real)*torch.log(1-fake + 1e-15)))
 
 def discriminator_loss(real_output, trans_output):
 	real_loss = bxe(torch.ones_like(real_output), real_output)
@@ -62,6 +62,6 @@ def ot_transformer_loss(trans_data, source_u,dest_u,disc_output, ot_data, is_was
 	
 	re_loss = reconstruction_loss(trans_data, ot_data).view(-1,1)
 	disc_loss = transformer_loss(disc_output, is_wasserstein).view(-1,1)
-	loss = re_loss * (1 - time_diff) + disc_loss * time_diff
+	loss = re_loss * (1 - time_diff) + 0.*disc_loss * time_diff
 	# print(loss.size())
 	return torch.mean(loss)

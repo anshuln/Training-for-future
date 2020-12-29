@@ -6,9 +6,9 @@ from torchvision import models as tv_models
 DEVICE = "cuda:0"
 
 def init_weights(m):
-    if type(m) == nn.Linear:
-        nn.init.xavier_normal_(m.weight, gain=1.0)
-        # m.bias.data.fill_(0.01)
+	if type(m) == nn.Linear:
+		nn.init.xavier_normal_(m.weight, gain=1.0)
+		# m.bias.data.fill_(0.01)
 
 class TimeReLU(nn.Module):
 
@@ -174,6 +174,89 @@ class ClassifyNet(nn.Module):
 		if self.time_conditioning:
 			self.leaky = kwargs['leaky'] if kwargs.get('leaky') else False
 		use_time2vec = kwargs['use_time2vec'] if kwargs.get('use_time2vec') else False
+		self.regress = kwargs['task'] == 'regression' if kwargs.get('task') else False
+		if use_time2vec:
+			self.time_shape = 8
+			self.time2vec = Time2Vec(1,8)
+		else:
+			self.time_shape = 1
+			self.time2vec = None
+
+		self.layers = nn.ModuleList()
+		self.relus = nn.ModuleList()
+
+		self.input_shape = input_shape
+		self.hidden_shapes = hidden_shapes
+		self.output_shape = output_shape
+	
+		if len(self.hidden_shapes) == 0:
+
+			self.layers.append(nn.Linear(input_shape, output_shape))
+			if self.time_conditioning:
+				self.relus.append(TimeReLU(data_shape=output_shape,time_shape=self.time_shape))
+			else:
+				self.relus.append(nn.LeakyReLU())
+
+		else:
+
+			self.layers.append(nn.Linear(self.input_shape, self.hidden_shapes[0]))
+			if self.time_conditioning:
+				self.relus.append(TimeReLU(data_shape=self.hidden_shapes[0],time_shape=self.time_shape))
+			else:
+				self.relus.append(nn.LeakyReLU())
+
+			for i in range(len(self.hidden_shapes) - 1):
+
+				self.layers.append(nn.Linear(self.hidden_shapes[i], self.hidden_shapes[i+1]))
+				if self.time_conditioning:
+					self.relus.append(TimeReLU(data_shape=self.hidden_shapes[i+1],time_shape=self.time_shape))
+				else:
+					self.relus.append(nn.LeakyReLU())
+
+			self.layers.append(nn.Linear(self.hidden_shapes[-1],self.output_shape))
+			if self.time_conditioning:
+				self.relus.append(TimeReLU(data_shape=output_shape,time_shape=self.time_shape))
+			else:
+				self.relus.append(nn.LeakyReLU())
+		self.apply(init_weights)
+
+
+	def forward(self, X, times = None):
+		if self.time2vec is not None:
+			times = self.time2vec(times)
+
+		for i in range(len(self.layers)):
+
+			X = self.layers[i](X)
+			# print(self.relus[i])
+			if self.time_conditioning:
+				X = self.relus[i](X,times)
+			else:
+				X = self.relus[i](X)
+
+		if self.regress:
+			X = torch.relu(X)
+		else:
+			X = torch.softmax(X,dim=1)
+
+		return X
+
+class Transformer(nn.Module):
+
+	'''Class for Transformer module
+	
+	We now use VGG for encoding. Also try an end-2-end ClassifyNet
+	'''
+
+	def __init__(self, input_shape, hidden_shapes, output_shape, **kwargs):
+
+		super(Transformer, self).__init__()
+		assert(len(hidden_shapes) >= 0)
+
+		self.time_conditioning = kwargs['time_conditioning'] if kwargs.get('time_conditioning') else False
+		if self.time_conditioning:
+			self.leaky = kwargs['leaky'] if kwargs.get('leaky') else False
+		use_time2vec = kwargs['use_time2vec'] if kwargs.get('use_time2vec') else False
 		if use_time2vec:
 			self.time_shape = 8
 			self.time2vec = Time2Vec(1,8)
@@ -238,9 +321,10 @@ class ClassifyNet(nn.Module):
 
 		return X
 
+
 class ClassifyNetCNN(nn.Module):
 
-	def __init__(self,data_shape, hidden_shape, n_classes, append_time=False,encode_time=False,time_conditioning=True,leaky=True,use_vgg=False,time2vec=True,):
+	def __init__(self,data_shape, hidden_shape, n_classes, append_time=False,encode_time=False,time_conditioning=True,leaky=True,use_vgg=False,time2vec=True):
 		
 		super(ClassifyNetCNN,self).__init__()
 		# assert(len(hidden_shapes) >= 0)
@@ -338,7 +422,7 @@ class GradNet(nn.Module):
 
 		self.loss_type = kwargs['loss_type'] if kwargs.get('loss_type') else False
 		
-		if self.loss_type == 'mse':
+		if self.loss_type == 'mse' or self.loss_type == 'bce':
 			self.output_shape = 1
 
 		elif self.loss_type == 'cosine':
@@ -346,26 +430,30 @@ class GradNet(nn.Module):
 	
 		if len(self.hidden_shapes) == 0:
 
-		  self.layers_1.append(nn.Linear(input_shape, output_shape))
-		  self.layers_2.append(nn.Linear(input_shape, output_shape))
-		  self.relus.append(nn.LeakyReLU())
+			self.layers_1.append(nn.Linear(input_shape, output_shape))
+			self.layers_2.append(nn.Linear(input_shape, output_shape))
+			self.relus.append(nn.LeakyReLU())
 			
 		else:
 
-		  self.layers_1.append(nn.Linear(self.input_shape, self.hidden_shapes[0]))
-		  self.layers_2.append(nn.Linear(self.input_shape, self.hidden_shapes[0]))
-		  self.relus.append(nn.LeakyReLU())
+			self.layers_1.append(nn.Linear(self.input_shape, self.hidden_shapes[0]))
+			self.layers_2.append(nn.Linear(self.input_shape, self.hidden_shapes[0]))
+			self.relus.append(nn.LeakyReLU())
 
-		  for i in range(len(self.hidden_shapes) - 1):
+			for i in range(len(self.hidden_shapes) - 1):
 
-			  self.layers_1.append(nn.Linear(self.hidden_shapes[i], self.hidden_shapes[i+1]))
-			  self.layers_2.append(nn.Linear(self.hidden_shapes[i], self.hidden_shapes[i+1]))
-			  self.relus.append(nn.LeakyReLU())
+				self.layers_1.append(nn.Linear(self.hidden_shapes[i], self.hidden_shapes[i+1]))
+				self.layers_2.append(nn.Linear(self.hidden_shapes[i], self.hidden_shapes[i+1]))
+				self.relus.append(nn.LeakyReLU())
 
-		  self.layers_1.append(nn.Linear(2*self.hidden_shapes[-1], self.hidden_shapes[-1]))
-		  self.layers_1.append(nn.Linear(self.hidden_shapes[-1], 1))
-		  self.relus.append(nn.LeakyReLU())
-		  self.relus.append(nn.LeakyReLU())
+			self.layers_1.append(nn.Linear(2*self.hidden_shapes[-1], self.hidden_shapes[-1]))
+			self.layers_1.append(nn.Linear(self.hidden_shapes[-1], 1))
+			self.relus.append(nn.LeakyReLU())
+			if self.loss_type == 'bce':
+				# print("YEAH")
+				self.relus.append(nn.Sigmoid())
+			else:
+				self.relus.append(nn.LeakyReLU())
 
 
 	def forward(self, X1, X2):
@@ -379,6 +467,8 @@ class GradNet(nn.Module):
 		# Common part
 
 		X = (self.layers_1[-1](self.relus[-2](self.layers_1[-2](torch.cat([X1 ,X2],dim=-1)))))
+		if self.loss_type == 'bce':
+			X = torch.sigmoid(X)
 		return X
 		
 
