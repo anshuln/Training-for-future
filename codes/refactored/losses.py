@@ -11,6 +11,16 @@ def classification_loss(Y_pred, Y):
 	# print(Y_new * torch.log(Y_pred+ 1e-15))
 	return  -1.*torch.sum((Y_new * torch.log(Y_pred+ 1e-15)),dim=1)
 
+def categorical_reconstruction_loss(Y_pred,Y):
+	rec = 2*torch.abs((Y_pred[:,:1] - Y[:,:1])).sum(dim=1).mean()
+	# print(rec.size())
+	rec1 =  - 2*(Y[:,1:28]*torch.log(Y_pred[:,1:28] + 1e-10)).sum(dim=1).mean()
+	# print(rec.size())
+	rec2 =  - 2*(Y[:,28:30]*torch.log(Y_pred[:,28:30] + 1e-10)).sum(dim=1).mean()
+	# print(rec.size())
+	rec3 =   ((Y_pred[:,30:]-Y[:,30:])**2).sum(dim=1).mean()
+	# print(rec.size())
+	return rec+rec1+rec2+rec3, rec, rec1, rec2, rec3
 def bxe(real, fake):
 	return -1.*((real*torch.log(fake+ 1e-15)) + ((1-real)*torch.log(1-fake + 1e-15)))
 

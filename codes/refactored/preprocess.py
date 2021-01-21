@@ -253,6 +253,7 @@ def load_house_price(root_dir="../../data/HousePrice", text_file="../../data/Hou
 	data = df.to_numpy()
 	for idx,row in enumerate(data):
 		all_labels.append(row[0]/10000)
+
 		u = int(datetime.fromtimestamp(int(row[-1])).year)
 		all_X.append(np.array(row[1:].tolist()+[u]))
 		# all_U.append(u)
@@ -261,13 +262,13 @@ def load_house_price(root_dir="../../data/HousePrice", text_file="../../data/Hou
 			indices[u].append(idx)
 		else:
 			indices[u] = [idx]
-	print(idx)
+	# print(idx)
 	all_X = np.stack(all_X)
-	print(all_X)
 	all_X = all_X - all_X.min(axis=0).reshape((1,-1))
 	all_X = all_X / all_X.max(axis=0).reshape((1,-1))
 	all_U = all_X[:,-1]
 	all_A = all_X[:,-2]
+	print(all_X[:3])
 	new_ind = []
 	for i in [2007,2008,2009,2010,2011,2012,2013,2014,2015,2016,2017,2018,2019]:
 		print(len(indices[i]))

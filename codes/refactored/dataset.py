@@ -130,7 +130,7 @@ class GradDataset(torch.utils.data.Dataset):
 		# print("---------- READING MNIST ----------")
 		if self.rand_target == False:
 			for idx,l in enumerate(self.target_indices):
-				print(idx)
+				# print(idx)
 				for i in l:
 					if self.label_dict_func(self.Y[i].item()) not in self.target_labs.keys():
 						self.target_labs[self.label_dict_func(self.Y[i].item())] = {idx : [i]}
@@ -139,7 +139,7 @@ class GradDataset(torch.utils.data.Dataset):
 					else:
 						self.target_labs[self.label_dict_func(self.Y[i].item())][idx].append(i)
 		# for k in self.target_labs:
-		# 	print(self.target_labs[k].keys())
+		#   print(self.target_labs[k].keys())
 	def __getitem__(self, idx):
 		
 		index = self.src_indices[idx]
@@ -181,3 +181,59 @@ class GradDataset(torch.utils.data.Dataset):
 	
 	def __len__(self):
 		return len(self.src_indices)        
+
+
+
+class MetaDataset(torch.utils.data.Dataset):
+
+	def __init__(self, indices, boost_weights=None,testing=False, **kwargs):
+		self.indices = indices # Indices are the indices of the elements from the arrays which are emitted by this data-loader
+		
+		self.root = kwargs['root_dir']
+		self.device = kwargs['device'] if kwargs.get('device') else 'cpu'
+		self.num_bins = kwargs['num_bins'] if kwargs.get('num_bins') else 6
+		self.base_bin = kwargs['num_bins'] if kwargs.get('num_bins') else 0   # Minimum whole number value of U
+		self.pretrain = kwargs['pretrain'] if kwargs.get('pretrain') else False
+		#self.num_bins = kwargs['num_bins']  # using this we can get the bin corresponding to a U value
+		self.append_label = kwargs['append_label'] if kwargs.get('append_label') else False
+		
+		self.X = np.load("{}/X.npy".format(self.root))
+		self.Y = np.load("{}/Y.npy".format(self.root))
+		# self.A = np.load("{}/A.npy".format(self.root))
+		self.U = np.load("{}/U.npy".format(self.root))
+
+		if testing:
+			self.indices = indices[int(len(indices)*kwargs["test_ratio"]):]
+
+		self.W = boost_weights
+		# print("METADATA",self.X.shape)
+		self.drop_cols = kwargs['drop_cols_classifier'] if kwargs.get('drop_cols_classifier') else None
+		
+	def __getitem__(self,idx):
+
+		index = self.indices[idx]
+		data = torch.tensor(self.X[index]).float().to(self.device)   # Check if we need to reshape
+		label = torch.tensor(self.Y[index]).long().to(self.device)
+		# auxiliary = torch.tensor(self.A[index]).float().to(self.device).view(-1, 1)
+		domain = torch.tensor(self.U[index]).float().to(self.device).view(-1, 1)
+
+		domain_next = domain + (1/self.num_bins)
+
+		if self.drop_cols is not None:
+			data = data[:self.drop_cols]
+
+		if self.append_label:
+			data         = torch.cat([data,label.view(1).float()/10],dim=0)
+
+		if self.pretrain:
+			data = torch.cat([data,domain.view(1)],dim=0)
+		else:
+			data = torch.cat([data,domain_next.view(1)],dim=0)
+
+
+		if self.W is not None:
+			return data,domain,torch.tensor(self.W[index]).float().to(self.device).view(-1, 1), label
+		return data, domain, domain_next, label
+
+	def __len__(self):
+		return len(self.indices)

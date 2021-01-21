@@ -241,6 +241,97 @@ class ClassifyNet(nn.Module):
 
 		return X
 
+
+
+
+class ClassifierMetaHouse(nn.Module):
+	def __init__(self,data_shape, hidden_shapes, out_shape, time_conditioning=True,leaky=False,task='classification'):
+		super(ClassifierMetaHouse,self).__init__()
+		self.vars = nn.ParameterList()
+		self.wt_names = []
+		self.time_conditioning = time_conditioning
+		self.task = task
+		param_idx = 0
+
+		w = nn.Parameter(torch.ones(hidden_shapes[0],data_shape))
+		torch.nn.init.kaiming_normal_(w)
+		self.vars.append(w)
+		w = nn.Parameter(torch.zeros(hidden_shapes[0]))
+		self.vars.append(w)
+		self.wt_names.append(("lin_0",[param_idx,param_idx+1]))
+		param_idx += 2
+
+		w = nn.Parameter(torch.ones(hidden_shapes[0],1))
+		torch.nn.init.kaiming_normal_(w)
+		self.vars.append(w)
+		w = nn.Parameter(torch.zeros(hidden_shapes[0]))
+		self.vars.append(w)
+		self.wt_names.append(("tr_0",[param_idx,param_idx+1]))
+		param_idx += 2
+
+		for i in range(len(hidden_shapes)-1):
+			w = nn.Parameter(torch.ones(hidden_shapes[i+1],hidden_shapes[i]))
+			torch.nn.init.kaiming_normal_(w)
+			self.vars.append(w)
+			w = nn.Parameter(torch.zeros(hidden_shapes[i+1]))
+			self.vars.append(w)
+			self.wt_names.append(("lin_h_{}".format(i),[param_idx,param_idx+1]))
+			param_idx += 2
+
+			w = nn.Parameter(torch.ones(hidden_shapes[i+1],1))
+			torch.nn.init.kaiming_normal_(w)
+			self.vars.append(w)
+			w = nn.Parameter(torch.zeros(hidden_shapes[i+1]))
+			self.vars.append(w)
+			self.wt_names.append(("tr_h_{}".format(i),[param_idx,param_idx+1]))
+			param_idx += 2
+
+
+		w = nn.Parameter(torch.ones(out_shape,hidden_shapes[-1]))
+		torch.nn.init.kaiming_normal_(w)
+		self.vars.append(w)
+		w = nn.Parameter(torch.zeros(out_shape))
+		self.vars.append(w)
+		self.wt_names.append(("lin_1",[param_idx,param_idx+1]))
+		param_idx += 2
+
+		# w = nn.Parameter(torch.ones(out_shape,1))
+		# torch.nn.init.kaiming_normal_(w)
+		# self.vars.append(w)
+		# w = nn.Parameter(torch.zeros(out_shape))
+		# self.vars.append(w)
+		# self.wt_names.append(("tr_1",[param_idx,param_idx+1]))
+		# param_idx += 2
+
+
+	def forward(self,X, times, vars=None):
+		if vars is None:
+			vars = self.vars
+		# times = X[:,-1:].view(-1,1)
+		# X = self.time_encodings(X)
+		if len(times.size()) == 3: times = times.squeeze(-1)
+		for i in range(len(self.wt_names)):
+			name,idx = self.wt_names[i]
+			# print(X.size(),name,idx)
+			if "lin" in name:
+				w,b = vars[idx[0]], vars[idx[1]]
+				# X = F.linear(X,w,b)
+				X = X @ w.t() + b
+			if "tr" in name:
+				w,b = vars[idx[0]], vars[idx[1]]
+				# thresholds = F.linear(times,w,b)
+				# print(times.size(),w.size())
+				thresholds = times @ w.t() + b
+				# print(thresholds.size(),X.size(),w.size(),b.size(),times.size())
+				X = torch.where(X>thresholds,X,thresholds)
+
+		if self.task == 'classification':
+			X = torch.softmax(X,dim=1)
+		else:
+			X = torch.relu(X)
+		return X
+
+
 class Transformer(nn.Module):
 
 	'''Class for Transformer module
@@ -254,6 +345,7 @@ class Transformer(nn.Module):
 		assert(len(hidden_shapes) >= 0)
 
 		self.time_conditioning = kwargs['time_conditioning'] if kwargs.get('time_conditioning') else False
+		self.lazy_time = kwargs['lazy_time'] if kwargs.get('lazy_time') else 0 # lazy_time = -2 means last dim is label, -1 means last dim is target time, 0 means you don't forcibly append dest time
 		if self.time_conditioning:
 			self.leaky = kwargs['leaky'] if kwargs.get('leaky') else False
 		use_time2vec = kwargs['use_time2vec'] if kwargs.get('use_time2vec') else False
@@ -261,7 +353,7 @@ class Transformer(nn.Module):
 			self.time_shape = 8
 			self.time2vec = Time2Vec(1,8)
 		else:
-			self.time_shape = 1
+			self.time_shape = 2
 			self.time2vec = None
 
 		self.layers = nn.ModuleList()
@@ -270,12 +362,12 @@ class Transformer(nn.Module):
 		self.input_shape = input_shape
 		self.hidden_shapes = hidden_shapes
 		self.output_shape = output_shape
-	
+		
 		if len(self.hidden_shapes) == 0:
 
 			self.layers.append(nn.Linear(input_shape, output_shape))
 			if self.time_conditioning:
-				self.relus.append(TimeReLU(data_shape=output_shape,time_shape=self.time_shape))
+				self.relus.append(TimeReLU(data_shape=output_shape,time_shape=self.time_shape,leaky=self.leaky))
 			else:
 				self.relus.append(nn.LeakyReLU())
 
@@ -283,7 +375,7 @@ class Transformer(nn.Module):
 
 			self.layers.append(nn.Linear(self.input_shape, self.hidden_shapes[0]))
 			if self.time_conditioning:
-				self.relus.append(TimeReLU(data_shape=self.hidden_shapes[0],time_shape=self.time_shape))
+				self.relus.append(TimeReLU(data_shape=self.hidden_shapes[0],time_shape=self.time_shape,leaky=self.leaky))
 			else:
 				self.relus.append(nn.LeakyReLU())
 
@@ -291,13 +383,13 @@ class Transformer(nn.Module):
 
 				self.layers.append(nn.Linear(self.hidden_shapes[i], self.hidden_shapes[i+1]))
 				if self.time_conditioning:
-					self.relus.append(TimeReLU(data_shape=self.hidden_shapes[i+1],time_shape=self.time_shape))
+					self.relus.append(TimeReLU(data_shape=self.hidden_shapes[i+1],time_shape=self.time_shape,leaky=self.leaky))
 				else:
 					self.relus.append(nn.LeakyReLU())
 
 			self.layers.append(nn.Linear(self.hidden_shapes[-1],self.output_shape))
 			if self.time_conditioning:
-				self.relus.append(TimeReLU(data_shape=output_shape,time_shape=self.time_shape))
+				self.relus.append(TimeReLU(data_shape=output_shape,time_shape=self.time_shape,leaky=self.leaky))
 			else:
 				self.relus.append(nn.LeakyReLU())
 		self.apply(init_weights)
@@ -317,7 +409,12 @@ class Transformer(nn.Module):
 				X = self.relus[i](X)
 
 
-		X = torch.relu(X)
+		# X = torch.relu(X)
+		X = torch.cat([X[:,:1],torch.softmax(X[:,1:28],dim=1),torch.softmax(X[:,28:30],dim=1),X[:,30:]],dim=1)
+		if self.lazy_time == -2:
+			X = torch.cat([X[:,:-2],times[:,-1].view(-1,1),X[:,-1].view(-1,1)],dim=1)
+		elif self.lazy_time == -1:
+			X = torch.cat([X[:,:-1],times[:,-1].view(-1,1)],dim=1)
 
 		return X
 
