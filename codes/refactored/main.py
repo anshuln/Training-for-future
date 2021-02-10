@@ -38,6 +38,8 @@ def main(args):
 		trainer = MetaTrainer(args)
 	elif args.train_algo == "grad_reg":
 		trainer = GradRegTrainer(args)
+	elif args.train_algo == "hybrid":
+		trainer = HybridTrainer(args)
 	trainer.train()
 
 
@@ -56,6 +58,8 @@ if __name__ == '__main__':
 	parser.add_argument('--use_cuda',action='store_true',help="Should we use a GPU")
 	parser.add_argument('--preprocess',action='store_true',help="Do we pre-process the data?")
 	parser.add_argument('--encoder',action='store_true',help="Do we use encodings?")
+	parser.add_argument('--delta',default=0.0,type=float)
+	parser.add_argument('--seed',default=None)
 
 	
 	args = parser.parse_args()
