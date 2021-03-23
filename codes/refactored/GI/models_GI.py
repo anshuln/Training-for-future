@@ -34,6 +34,10 @@ class Time2Vec(nn.Module):
 		te_lin = self.model_0(X)
 		te_sin = torch.sin(self.model_1(X))
 		#te_dir = torch.max(10, torch.exp(-(self.model_2(X))))
+		if len(te_lin.shape) == 3:
+			te_lin = te_lin.squeeze(1)
+		if len(te_sin.shape) == 3:
+			te_sin = te_sin.squeeze(1)
 		te = torch.cat([te_lin, te_sin], axis=1)
 		return te
 
@@ -121,6 +125,7 @@ class TimeReLUCNN(nn.Module):
 		#X = X.view(*list(orig_shape))
 		return X
 
+
 '''
 Prediction (classifier/regressor) model
 Assumes 2 hidden layers
@@ -153,7 +158,7 @@ class PredictionModel(nn.Module):
 		nn.init.kaiming_normal_(self.layer_2.weight)
 		nn.init.zeros_(self.layer_2.bias)
 
-	def forward(self, X, times):
+	def forward(self, X, times,logits=False):
 		
 		X = torch.cat([X, times], dim=1)
 		if self.using_t2v:
@@ -163,6 +168,8 @@ class PredictionModel(nn.Module):
 		#X = self.relu_2(self.layer_2(X), times)
 		X = self.layer_2(X)
 
+		if not logits:
+			X = torch.sigmoid(X)
 		return X
 
 
@@ -232,7 +239,7 @@ class ClassifyNetHuge(nn.Module):
 
 		self.apply(init_weights)
 
-	def forward(self,X,times=None):
+	def forward(self,X,times=None,logits=False):
 		if self.time2vec is not None:
 			t1 = self.time2vec(times)
 			X = self.layers[0](X)
@@ -254,7 +261,7 @@ class ClassifyNetHuge(nn.Module):
 		else:
 			X = torch.softmax(X,dim=1)
 
-		return X        
+		return X		
 
 
 class ResidualBlock(nn.Module):
@@ -339,7 +346,7 @@ class ResNet(nn.Module):
 			layers.append(block(out_channels, out_channels))
 		return nn.Sequential(*layers)
 
-	def forward(self, x, times=None):
+	def forward(self, x, times=None,logits=False):
 		#times_ = times.unsqueeze(2).repeat(1,28,28)[:, None, :, :]
 		#x = torch.cat([x, times_], dim=1)
 		times = self.t2v(times)
@@ -370,6 +377,8 @@ class ResNet(nn.Module):
 		out = self.fc1(out)
 		out = self.relu_fc1(out, times)
 		out = self.fc2(out)
+		if not logits:
+			out = torch.softmax(out,dim=-1)
 		return out
 
 
