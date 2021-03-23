@@ -226,7 +226,7 @@ class GradRegTrainer():
 		self.target_domain_indices = config.target_domain_indices   #[11]
 		data_index_file = config.data_index_file    #"../../data/HousePrice/indices.json"
 		self.classifier = config.classifier(**config.model_kwargs).to(args.device) 
-
+		self.lr = config.lr
 		self.classifier_optimizer = torch.optim.Adam(self.classifier.parameters(),config.lr)
 		# loss_type = 'bce' if self.dataset_kwargs['return_binary'] else 'reg'
 		
@@ -242,6 +242,7 @@ class GradRegTrainer():
 		self.delta_clamp=config.delta_clamp
 		self.delta_steps=config.delta_steps
 		self.lambda_GI=config.lambda_GI
+		self.num_finetune_domains = config.num_finetune_domains
 
 		data_indices = json.load(open(data_index_file,"r")) #, allow_pickle=True)
 		self.source_data_indices = [data_indices[i] for i in self.source_domain_indices]
@@ -442,8 +443,8 @@ class GradRegTrainer():
 		print("-----------------------------------------")
 		print("Performance of the base classifier")
 		self.eval_classifier()
-		self.classifier_optimizer = torch.optim.Adam(self.classifier.parameters(),5e-4)
-		self.finetune_grad_int()
+		self.classifier_optimizer = torch.optim.Adam(self.classifier.parameters(),self.lr)
+		self.finetune_grad_int(num_domains=self.num_finetune_domains)
 		# self.visualize_trajectory(vis_ind[:9],"plots/{}_{}".format(self.seed,self.delta))
 		
 		print("-----------------------------------------")
