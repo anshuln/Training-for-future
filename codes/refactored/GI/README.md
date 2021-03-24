@@ -10,4 +10,4 @@
 * `models_GI.py` has the model definitions, `main.py` is the entrypoint to the code
 
 ## Running the code
-Run `python3 -W ignore main.py --data <DS> --epoch_classifier <NUM> --epoch_finetune <NUM> --bs <NUM> --use_cuda --early_stopping` with the dataset name. 
+Run `python3 -W ignore main.py --data <DS> --epoch_classifier <NUM> --epoch_finetune <NUM> --bs <NUM> --use_cuda --early_stopping --algo grad_reg` with the dataset name. 
