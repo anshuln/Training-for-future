@@ -51,6 +51,7 @@ class TimeReLU(nn.Module):
 		
 		super(TimeReLU,self).__init__()
 		self.leaky = leaky
+		# self.model = nn.Linear(time_shape,data_shape)
 		self.model_0 = nn.Linear(time_shape, 16)
 		
 		self.model_1 = nn.Linear(16, data_shape)
@@ -58,6 +59,7 @@ class TimeReLU(nn.Module):
 		self.time_dim = time_shape        
 
 		if self.leaky:
+			# self.model_alpha = nn.Linear(time_shape,data_shape)
 			self.model_alpha_0 = nn.Linear(time_shape, 16)
 			
 			self.model_alpha_1 = nn.Linear(16, data_shape)
@@ -67,13 +69,18 @@ class TimeReLU(nn.Module):
 
 	def forward(self, X, times):
 
-		thresholds = self.model_1(self.model_0(times))
+		if len(times.size()) == 3:
+			times = times.squeeze(2)
+		thresholds = self.model_1(self.relu(self.model_0(times)))
+		# thresholds = self.model(times)
 
 		if self.leaky:
-			alphas = self.model_alpha_1(self.model_alpha_0(times))
+			alphas = self.model_alpha_1(self.relu(self.model_alpha_0(times)))
+			# alphas = self.model_alpha(times)
 		else:
 			alphas = 0.0
-		X = torch.where(X>thresholds,X-thresholds,alphas*(X-thresholds)+thresholds)
+		X = torch.where(X>thresholds,X,alphas*(X-thresholds)+thresholds)
+		# X = torch.where(X>thresholds, X-thresholds,alphas*(X-thresholds))
 		return X
 
 class TimeReLUCNN(nn.Module):
@@ -178,7 +185,7 @@ class ClassifyNetHuge(nn.Module):
 	'''Prediction model for the housing dataset
 	
 	'''
-	def __init__(self,input_shape=32,hidden_shapes=[400,400,400],output_shape=1, **kwargs):
+	def __init__(self,input_shape=32,hidden_shapes=[400,400],output_shape=1, **kwargs):
 		super(ClassifyNetHuge, self).__init__()
 		assert(len(hidden_shapes) >= 0)
 
@@ -216,7 +223,7 @@ class ClassifyNetHuge(nn.Module):
 				self.layers.append(nn.Linear(self.input_shape, self.hidden_shapes[0]//2))
 				self.time2vec = nn.Linear(1,self.hidden_shapes[0]//2)
 			else:
-				self.layers.append(nn.Linear(self.input_shape, self.hidden_shapes[0]//2))
+				self.layers.append(nn.Linear(self.input_shape, self.hidden_shapes[0]))
 
 			if self.time_conditioning:
 				self.relus.append(TimeReLU(data_shape=self.hidden_shapes[0],time_shape=self.time_shape))
@@ -248,7 +255,6 @@ class ClassifyNetHuge(nn.Module):
 		else:
 			X = self.layers[0](X)
 		for i in range(1,len(self.layers)):
-
 			X = self.layers[i](X)
 			# print(self.relus[i])
 			if self.time_conditioning:
@@ -261,7 +267,7 @@ class ClassifyNetHuge(nn.Module):
 		else:
 			X = torch.softmax(X,dim=1)
 
-		return X		
+		return X        
 
 
 class ResidualBlock(nn.Module):

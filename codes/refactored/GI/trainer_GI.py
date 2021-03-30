@@ -56,9 +56,9 @@ def train_classifier_batch(X,dest_u,dest_a,Y,classifier,classifier_optimizer,bat
 	Y_pred = classifier(X_pred,dest_a)
 	pred_loss = loss_fn(Y_pred, Y)
 
-	# if verbose:
-	# 	with torch.no_grad():
-	# 		print(torch.cat([Y_pred[:20],Y[:20].view(-1,1).float(),pred_loss[:20].view(-1,1)],dim=1).detach().cpu().numpy(),file=log)
+	if verbose:
+		with torch.no_grad():
+			print(torch.cat([Y_pred[:20],Y[:20].view(-1,1).float(),pred_loss[:20].view(-1,1)],dim=1).detach().cpu().numpy(),file=log)
 
 	if kernel is not None:
 		pred_loss = pred_loss * kernel
@@ -193,6 +193,38 @@ def adversarial_finetune(X, U, Y, delta, classifier, classifier_optimizer,classi
 	return pred_loss
 
 
+def adversarial_finetune_goodfellow(X, U, Y, delta, classifier, classifier_optimizer,classifier_loss_fn,delta_lr=0.1,delta_clamp=0.15,delta_steps=10,lambda_GI=0.5,writer=None,step=None,string=None):
+	
+	classifier_optimizer.zero_grad()
+	
+	delta.requires_grad_(True)
+	
+	for ii in range(delta_steps):
+
+		U_grad = U.clone() + delta
+		U_grad.requires_grad_(True)
+		Y_pred = classifier(X, U_grad)
+
+		loss = classifier_loss_fn(Y_pred,Y).mean()
+		partial_loss_delta = torch.autograd.grad(loss, delta, grad_outputs=torch.ones_like(loss), retain_graph=True)[0]
+
+		delta = delta + delta_lr*partial_loss_delta
+		#print('%d %f' %(ii, delta.clone().detach().numpy()))
+	
+	delta = delta.clamp(-1*delta_clamp, delta_clamp)
+	delta = delta.detach()
+	U_grad = U.clone() + delta
+	U_grad.requires_grad_(True)
+	Y_pred = classifier(X, U_grad)
+
+	
+	pred_loss = classifier_loss_fn(Y_pred,Y).mean()# + (1 - Y_true) * torch.log(1 - Y_pred + 1e-9))
+	#pred_loss = torch.mean((Y_pred - Y_true)**2)
+	pred_loss.backward()
+	
+	classifier_optimizer.step()
+
+	return pred_loss
 
 # It is possible that the gains are due to "finetuning" and not due to the gradient regularization
 # Multi-step ideas
@@ -207,7 +239,7 @@ class GradRegTrainer():
 		# self.DataSet = MetaDataset
 
 		config = Config(args)
-	
+		self.goodfellow = args.goodfellow
 		self.DataSetClassifier = ClassificationDataSet
 		self.CLASSIFIER_EPOCHS = config.epoch_classifier
 		self.FINETUNING_EPOCHS = config.epoch_finetune 
@@ -254,9 +286,6 @@ class GradRegTrainer():
 		self.delta  = args.delta
 		self.patience = 2
 		self.early_stopping = args.early_stopping
-		if args.seed is not None:
-			torch.random.manual_seed(int(args.seed))
-			np.random.seed(int(args.seed))
 		self.seed = args.seed
 
 
@@ -270,8 +299,8 @@ class GradRegTrainer():
 				encoder {[type]} -- Encoder model to train (default: {None})
 			'''
 			class_step = 0
-		# for i in range(len(self.source_domain_indices)):
-		# if past_dataset is None:
+			# for i in range(len(self.source_domain_indices)):
+			# if past_dataset is None:
 			past_data = ClassificationDataSet(indices=self.cumulative_data_indices[-1],**self.dataset_kwargs)
 			past_dataset = torch.utils.data.DataLoader((past_data),self.BATCH_SIZE,True)
 			for epoch in range(self.CLASSIFIER_EPOCHS):
@@ -285,7 +314,7 @@ class GradRegTrainer():
 					class_step += 1
 					class_loss += l
 					self.writer.add_scalar("loss/classifier",l.item(),class_step)
-				print("Epoch %d Loss %f"%(epoch,class_loss),flush=False)
+				print("Epoch %d Loss %f"%(epoch,class_loss/len(past_data)),flush=False)
 
 			# past_dataset = None
 
@@ -322,9 +351,14 @@ class GradRegTrainer():
 				for batch_X, _, batch_U, batch_Y in tqdm(past_dataset):
 
 					batch_U = batch_U.view(-1,1)
-					delta = (torch.rand(batch_U.size()).float()*(0.1-(-0.1)) - 0.1).to(batch_X.device)
-					# TODO pass delta hyperparams here
-					l = adversarial_finetune(batch_X, batch_U, batch_Y, delta, self.classifier, self.classifier_optimizer,self.classifier_loss_fn,delta_lr=self.delta_lr,delta_clamp=self.delta_clamp,delta_steps=self.delta_steps,lambda_GI=self.lambda_GI,writer=self.writer,step=step,string="delta_{}".format(i))
+					if self.goodfellow:
+						delta = (torch.zeros(batch_U.size()).float()).to(batch_X.device)
+						# TODO pass delta hyperparams here
+						l = adversarial_finetune_goodfellow(batch_X, batch_U, batch_Y, delta, self.classifier, self.classifier_optimizer,self.classifier_loss_fn,delta_lr=self.delta_lr,delta_clamp=self.delta_clamp,delta_steps=self.delta_steps,lambda_GI=self.lambda_GI,writer=self.writer,step=step,string="delta_{}".format(i))
+					else:
+						delta = (torch.rand(batch_U.size()).float()*(0.1-(-0.1)) - 0.1).to(batch_X.device)
+						# TODO pass delta hyperparams here
+						l = adversarial_finetune(batch_X, batch_U, batch_Y, delta, self.classifier, self.classifier_optimizer,self.classifier_loss_fn,delta_lr=self.delta_lr,delta_clamp=self.delta_clamp,delta_steps=self.delta_steps,lambda_GI=self.lambda_GI,writer=self.writer,step=step,string="delta_{}".format(i))
 					loss = loss + l
 					self.writer.add_scalar("loss/test_{}".format(i),l.item(),step)
 					step += 1
@@ -354,7 +388,7 @@ class GradRegTrainer():
 						break
 
 
-	def eval_classifier(self):
+	def eval_classifier(self,log):
 
 		if self.data == "house":
 			self.dataset_kwargs["drop_cols_classifier"] = None
@@ -392,8 +426,8 @@ class GradRegTrainer():
 			Y_label = np.vstack(Y_label)
 			# print(np.hstack([Y_pred,Y_label]))
 			print(Y_pred.shape,Y_label.shape)
-			print('MAE: ',np.mean(np.abs(Y_label-Y_pred),axis=0))
-			print('MSE: ',np.mean((Y_label-Y_pred)**2,axis=0))
+			print('MAE: ',np.mean(np.abs(Y_label-Y_pred),axis=0),file=log)
+			print('MSE: ',np.mean((Y_label-Y_pred)**2,axis=0),file=log)
 
 
 	def visualize_trajectory(self,indices,filename=''):
@@ -435,21 +469,22 @@ class GradRegTrainer():
 		
 		self.train_classifier(encoder=self.encoder)  # Train classifier initially
 		# torch.save(self.classifier.state_dict(), "classifier.pth")
+		# print("Loading")
 		# self.classifier.load_state_dict(torch.load("classifier_time_huge.pth"))      
 		# vis_ind = np.array(self.cumulative_data_indices[-1])
 		# np.random.shuffle(vis_ind)
-		# vis_ind = [self.source_data_indices[0][3], self.source_data_indices[1][47], self.source_data_indices[2][102], self.source_data_indices[2][210], self.source_data_indices[3][168], self.source_data_indices[3][342], self.source_data_indices[4][42], self.source_data_indices[4][44],self.source_data_indices[4][189]]
-		# self.visualize_trajectory(vis_ind[:9],"plots/{}_{}_base".format(self.seed,self.delta))
-		print("-----------------------------------------")
-		print("Performance of the base classifier")
-		self.eval_classifier()
+		vis_ind = [self.source_data_indices[0][3], self.source_data_indices[1][47], self.source_data_indices[2][102], self.source_data_indices[2][210], self.source_data_indices[3][168], self.source_data_indices[3][342], self.source_data_indices[4][42], self.source_data_indices[4][44],self.source_data_indices[4][189]]
+		self.visualize_trajectory(vis_ind[:9],"plots/{}_{}_base".format(self.seed,self.delta))
+		log = open("results.txt","a")
+		print("Performance of the base classifier",file=log)
+		self.eval_classifier(log=log)
 		self.classifier_optimizer = torch.optim.Adam(self.classifier.parameters(),self.lr)
 		self.finetune_grad_int(num_domains=self.num_finetune_domains)
-		# self.visualize_trajectory(vis_ind[:9],"plots/{}_{}".format(self.seed,self.delta))
+		self.visualize_trajectory(vis_ind[:9],"plots/{}_{}_{}".format(self.seed,self.delta,self.goodfellow))
 		
-		print("-----------------------------------------")
-		print("Performance after fine-tuning")
-		self.eval_classifier()
+		print("-----------------------------------------",file=log)
+		print("Performance after fine-tuning",file=log)
+		self.eval_classifier(log=log)
 
 
 
