@@ -71,15 +71,15 @@ class TimeReLU(nn.Module):
 
 		if len(times.size()) == 3:
 			times = times.squeeze(2)
-		thresholds = self.model_1(self.relu(self.model_0(times)))
+		thresholds = self.model_1((self.model_0(times)))
 		# thresholds = self.model(times)
 
 		if self.leaky:
-			alphas = self.model_alpha_1(self.relu(self.model_alpha_0(times)))
+			alphas = self.model_alpha_1((self.model_alpha_0(times)))
 			# alphas = self.model_alpha(times)
 		else:
 			alphas = 0.0
-		X = torch.where(X>thresholds,X,alphas*(X-thresholds)+thresholds)
+		X = torch.where(X>thresholds,X-thresholds,alphas*(X-thresholds))
 		# X = torch.where(X>thresholds, X-thresholds,alphas*(X-thresholds))
 		return X
 
@@ -167,6 +167,9 @@ class PredictionModel(nn.Module):
 
 	def forward(self, X, times,logits=False):
 		
+		if len(times.size()) == 3:  
+			times = times.squeeze(1)
+
 		X = torch.cat([X, times], dim=1)
 		if self.using_t2v:
 			times = self.t2v(times)

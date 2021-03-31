@@ -56,9 +56,9 @@ def train_classifier_batch(X,dest_u,dest_a,Y,classifier,classifier_optimizer,bat
 	Y_pred = classifier(X_pred,dest_a)
 	pred_loss = loss_fn(Y_pred, Y)
 
-	if verbose:
-		with torch.no_grad():
-			print(torch.cat([Y_pred[:20],Y[:20].view(-1,1).float(),pred_loss[:20].view(-1,1)],dim=1).detach().cpu().numpy(),file=log)
+	# if verbose:
+	# 	with torch.no_grad():
+	# 		print(torch.cat([Y_pred[:20],Y[:20].view(-1,1).float(),pred_loss[:20].view(-1,1)],dim=1).detach().cpu().numpy(),file=log)
 
 	if kernel is not None:
 		pred_loss = pred_loss * kernel
@@ -142,8 +142,6 @@ def adversarial_finetune(X, U, Y, delta, classifier, classifier_optimizer,classi
 		Y_pred = Y_pred + delta * partial_Y_pred_t
 		if len(Y_pred.shape)>1 and Y_pred.shape[1] > 1:
 			Y_pred = torch.softmax(Y_pred,dim=-1)
-		#print(Y_pred.shape)
-		#print(Y_pred[0:10])
 		# loss = -torch.mean(Y_true * torch.log(Y_pred + 1e-9))
 		loss = classifier_loss_fn(Y_pred,Y)
 		partial_loss_delta = torch.autograd.grad(loss, delta, grad_outputs=torch.ones_like(loss), retain_graph=True)[0]
@@ -304,7 +302,6 @@ class GradRegTrainer():
 			past_data = ClassificationDataSet(indices=self.cumulative_data_indices[-1],**self.dataset_kwargs)
 			past_dataset = torch.utils.data.DataLoader((past_data),self.BATCH_SIZE,True)
 			for epoch in range(self.CLASSIFIER_EPOCHS):
-				
 				class_loss = 0
 				for batch_X, batch_A, batch_U, batch_Y in tqdm(past_dataset):
 
@@ -315,7 +312,6 @@ class GradRegTrainer():
 					class_loss += l
 					self.writer.add_scalar("loss/classifier",l.item(),class_step)
 				print("Epoch %d Loss %f"%(epoch,class_loss/len(past_data)),flush=False)
-
 			# past_dataset = None
 
 	def finetune_grad_int(self, num_domains=2):
@@ -401,26 +397,26 @@ class GradRegTrainer():
 			if self.encoder is not None:
 				batch_X = self.encoder(batch_X)
 			batch_Y_pred = self.classifier(batch_X, batch_U).detach().cpu().numpy()
-			# print(batch_Y_pred.shape)
 			if self.task == 'classification':
 				if batch_Y_pred.shape[1] > 1:
 					Y_pred = Y_pred + [np.argmax(batch_Y_pred,axis=1)]
 				else:
 					Y_pred = Y_pred + [(batch_Y_pred>0.5)*1.0]
 
+				# if batch_Y.shape[1] > 1:
+				# 	Y_label = Y_label + [np.argmax(batch_Y.detach().cpu().numpy(),axis=1).reshape((batch_Y_pred.shape[0],1))]
+				# else:
 				Y_label = Y_label + [batch_Y.detach().cpu().numpy()]
 			elif self.task == 'regression':
 				Y_pred = Y_pred + [batch_Y_pred.reshape(-1,1)]
 				Y_label = Y_label + [batch_Y.detach().cpu().numpy().reshape(-1,1)]
-		print(len(Y_pred),len(Y_label))
-		# print(Y_pred[0].shape,Y_label[0].shape)
 		if self.task == 'classification':
-			Y_pred = np.hstack(Y_pred)
+			Y_pred = np.vstack(Y_pred)
 			Y_label = np.hstack(Y_label)
-			print('shape: ',Y_pred.shape)
-			print(accuracy_score(Y_label, Y_pred))
-			print(confusion_matrix(Y_label, Y_pred))
-			print(classification_report(Y_label, Y_pred))    
+			print('shape: ',Y_pred.shape, Y_label.shape)
+			print(accuracy_score(Y_label, Y_pred),file=log)
+			print(confusion_matrix(Y_label, Y_pred),file=log)
+			print(classification_report(Y_label, Y_pred),file=log)    
 		else:
 			Y_pred = np.vstack(Y_pred)
 			Y_label = np.vstack(Y_label)
@@ -473,24 +469,15 @@ class GradRegTrainer():
 		# self.classifier.load_state_dict(torch.load("classifier_time_huge.pth"))      
 		# vis_ind = np.array(self.cumulative_data_indices[-1])
 		# np.random.shuffle(vis_ind)
-		vis_ind = [self.source_data_indices[0][3], self.source_data_indices[1][47], self.source_data_indices[2][102], self.source_data_indices[2][210], self.source_data_indices[3][168], self.source_data_indices[3][342], self.source_data_indices[4][42], self.source_data_indices[4][44],self.source_data_indices[4][189]]
-		self.visualize_trajectory(vis_ind[:9],"plots/{}_{}_base".format(self.seed,self.delta))
+		# vis_ind = [self.source_data_indices[0][3], self.source_data_indices[1][47], self.source_data_indices[2][102], self.source_data_indices[2][210], self.source_data_indices[3][168], self.source_data_indices[3][342], self.source_data_indices[4][42], self.source_data_indices[4][44],self.source_data_indices[4][189]]
+		# self.visualize_trajectory(vis_ind[:9],"plots/{}_{}_base".format(self.seed,self.delta))
 		log = open("results.txt","a")
 		print("Performance of the base classifier",file=log)
 		self.eval_classifier(log=log)
 		self.classifier_optimizer = torch.optim.Adam(self.classifier.parameters(),self.lr)
 		self.finetune_grad_int(num_domains=self.num_finetune_domains)
-		self.visualize_trajectory(vis_ind[:9],"plots/{}_{}_{}".format(self.seed,self.delta,self.goodfellow))
+		# self.visualize_trajectory(vis_ind[:9],"plots/{}_{}_{}".format(self.seed,self.delta,self.goodfellow))
 		
 		print("-----------------------------------------",file=log)
 		print("Performance after fine-tuning",file=log)
 		self.eval_classifier(log=log)
-
-
-
-'''Game plan
-
-We need to have all dataloaders give out tensors, take away numpy array stuff from train loop.
-Break down train loop into multiple functions as well.
-We give only time, X to all models. This will make stuff compatible. We then change the models to do appropriate things.
-'''
