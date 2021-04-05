@@ -86,7 +86,7 @@ def load_sleep(filename):
 	np.save(np.array(U_data))
 	# Save indices
 
-def load_moons(domains, root='../../data'):
+def load_moons(domains, model,root='../../data'):
 
 	"""
 
@@ -222,7 +222,7 @@ def load_comp_cars(root_dir="../../data/CompCars", text_file="../../data/CompCar
 	print(f"FAILED ON {failed}")
 # load_comp_cars()
 
-def load_house_price(root_dir="../../data/HousePrice", text_file="../../data/HousePrice/raw_sales.csv"):
+def load_house_price(model,root_dir="../../data/HousePrice", text_file="../../data/HousePrice/raw_sales.csv"):
 	all_X = []
 	all_labels = []
 	# all_U = []
@@ -257,7 +257,10 @@ def load_house_price(root_dir="../../data/HousePrice", text_file="../../data/Hou
 		all_labels.append(row[0]/10000)
 
 		u = int(datetime.fromtimestamp(int(row[-1])).year)
-		all_X.append(np.array(row[1:].tolist()+[u]))
+		if model in ["GI","tbaseline"]:
+			all_X.append(np.array(row[1:].tolist()+[u]))
+		else:
+			all_X.append(np.array(row[1:-1].tolist()))
 		# all_U.append(u)
 		# all_A.append(row[-1])     
 		if u in indices:
@@ -270,10 +273,10 @@ def load_house_price(root_dir="../../data/HousePrice", text_file="../../data/Hou
 	all_X = all_X / all_X.max(axis=0).reshape((1,-1))
 	all_U = all_X[:,-1]
 	all_A = all_X[:,-2]
-	print(all_X[:3])
+	# print(all_X[:3])
 	new_ind = []
 	for i in [2007,2008,2009,2010,2011,2012,2013,2014,2015,2016,2017,2018,2019]:
-		print(len(indices[i]))
+		# print(len(indices[i]))
 		new_ind.append(indices[i])
 	# print(new_ind[-1][-1])
 	# print(all_X,all_U,all_A)

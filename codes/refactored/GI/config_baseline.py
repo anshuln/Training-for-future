@@ -23,7 +23,7 @@ class Config():
 			self.data_index_file = "../../data/HousePrice/indices.json"
 			from models_GI import ClassifyNetHuge
 			self.classifier = ClassifyNetHuge 
-			self.model_kwargs =  {'time_conditioning':True,'task':'regression','use_time2vec':True,'leaky':True,"input_shape":31,"hidden_shapes":[400,400,400],"output_shape":1,'append_time':True}
+			self.model_kwargs =  {'time_conditioning':False,'task':'regression','use_time2vec':False,'leaky':False,"input_shape":30,"hidden_shapes":[400,400,400],"output_shape":1,'append_time':False}
 			self.lr = 5e-4
 			self.classifier_loss_fn = reconstruction_loss
 			self.loss_type = 'regression'

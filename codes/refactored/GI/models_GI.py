@@ -198,6 +198,7 @@ class ClassifyNetHuge(nn.Module):
 		use_time2vec = kwargs['use_time2vec'] if kwargs.get('use_time2vec') else False
 		self.regress = kwargs['task'] == 'regression' if kwargs.get('task') else False
 		self.time_shape = 1
+		self.append_time = kwargs['append_time'] if kwargs.get('append_time') else False
 
 		if use_time2vec:
 			self.time_shape = 1
@@ -250,6 +251,8 @@ class ClassifyNetHuge(nn.Module):
 		self.apply(init_weights)
 
 	def forward(self,X,times=None,logits=False):
+		if self.append_time :  # i.e. we use time as an input directly as well. Note that X should not have any time features for this to work!
+			X = torch.cat([X,times.view(-1,1)],dim=-1)
 		if self.time2vec is not None:
 			t1 = self.time2vec(times)
 			X = self.layers[0](X)

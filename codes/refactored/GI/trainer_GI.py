@@ -235,8 +235,16 @@ class GradRegTrainer():
 	def __init__(self,args):
 
 		# self.DataSet = MetaDataset
+		if args.model == "baseline":
+			from config_baseline import Config
+			config = Config(args)
+		elif args.model == "tbaseline" or args.model == "goodfellow":
+			from config_tbaseline import Config
+			config = Config(args)
+		elif args.model == "GI":
+			from config_GI import Config
+			config = Config(args)
 
-		config = Config(args)
 		self.goodfellow = args.goodfellow
 		self.DataSetClassifier = ClassificationDataSet
 		self.CLASSIFIER_EPOCHS = config.epoch_classifier
@@ -246,9 +254,10 @@ class GradRegTrainer():
 		self.CLASSIFICATION_BATCH_SIZE = 100
 		# self.PRETRAIN_EPOCH = 5
 		self.data = args.data 
+		self.model = args.model
 		self.update_num_steps = 1
 
-		self.writer = SummaryWriter(comment='{}'.format(time.time()),log_dir="new_runs")
+		self.writer = SummaryWriter(comment='{}-{}-{}'.format(time.time(),self.model,self.data),log_dir="new_runs")
 
 
 		self.dataset_kwargs = config.dataset_kwargs
@@ -347,7 +356,7 @@ class GradRegTrainer():
 				for batch_X, _, batch_U, batch_Y in tqdm(past_dataset):
 
 					batch_U = batch_U.view(-1,1)
-					if self.goodfellow:
+					if self.model == "goodfellow":
 						delta = (torch.zeros(batch_U.size()).float()).to(batch_X.device)
 						# TODO pass delta hyperparams here
 						l = adversarial_finetune_goodfellow(batch_X, batch_U, batch_Y, delta, self.classifier, self.classifier_optimizer,self.classifier_loss_fn,delta_lr=self.delta_lr,delta_clamp=self.delta_clamp,delta_steps=self.delta_steps,lambda_GI=self.lambda_GI,writer=self.writer,step=step,string="delta_{}".format(i))
@@ -471,13 +480,15 @@ class GradRegTrainer():
 		# np.random.shuffle(vis_ind)
 		# vis_ind = [self.source_data_indices[0][3], self.source_data_indices[1][47], self.source_data_indices[2][102], self.source_data_indices[2][210], self.source_data_indices[3][168], self.source_data_indices[3][342], self.source_data_indices[4][42], self.source_data_indices[4][44],self.source_data_indices[4][189]]
 		# self.visualize_trajectory(vis_ind[:9],"plots/{}_{}_base".format(self.seed,self.delta))
-		log = open("results.txt","a")
+		log = open("results_{}_{}.txt".format(self.model,self.data),"a")
+		print("#####################################",file=log)
 		print("Performance of the base classifier",file=log)
 		self.eval_classifier(log=log)
 		self.classifier_optimizer = torch.optim.Adam(self.classifier.parameters(),self.lr)
-		self.finetune_grad_int(num_domains=self.num_finetune_domains)
+		if self.model == "GI" or self.model == "goodfellow":
+			self.finetune_grad_int(num_domains=self.num_finetune_domains)
 		# self.visualize_trajectory(vis_ind[:9],"plots/{}_{}_{}".format(self.seed,self.delta,self.goodfellow))
 		
-		print("-----------------------------------------",file=log)
+		# print("-----------------------------------------",file=log)
 		print("Performance after fine-tuning",file=log)
 		self.eval_classifier(log=log)
