@@ -57,8 +57,8 @@ def train_classifier_batch(X,dest_u,dest_a,Y,classifier,classifier_optimizer,bat
 	pred_loss = loss_fn(Y_pred, Y)
 
 	# if verbose:
-	# 	with torch.no_grad():
-	# 		print(torch.cat([Y_pred[:20],Y[:20].view(-1,1).float(),pred_loss[:20].view(-1,1)],dim=1).detach().cpu().numpy(),file=log)
+	#   with torch.no_grad():
+	#       print(torch.cat([Y_pred[:20],Y[:20].view(-1,1).float(),pred_loss[:20].view(-1,1)],dim=1).detach().cpu().numpy(),file=log)
 
 	if kernel is not None:
 		pred_loss = pred_loss * kernel
@@ -397,8 +397,9 @@ class GradRegTrainer():
 
 		if self.data == "house":
 			self.dataset_kwargs["drop_cols_classifier"] = None
+		self.classifier.eval()
 		td = ClassificationDataSet(indices=self.target_indices,**self.dataset_kwargs)
-		target_dataset = torch.utils.data.DataLoader(td,self.BATCH_SIZE,self.shuffle,drop_last=False)
+		target_dataset = torch.utils.data.DataLoader(td,self.BATCH_SIZE,False,drop_last=False)
 		Y_pred = []
 		Y_label = []
 		for batch_X, batch_A,batch_U, batch_Y in target_dataset:
@@ -408,12 +409,12 @@ class GradRegTrainer():
 			batch_Y_pred = self.classifier(batch_X, batch_U).detach().cpu().numpy()
 			if self.task == 'classification':
 				if batch_Y_pred.shape[1] > 1:
-					Y_pred = Y_pred + [np.argmax(batch_Y_pred,axis=1)]
+					Y_pred = Y_pred + [np.argmax(batch_Y_pred,axis=1).reshape((-1,1))]
 				else:
 					Y_pred = Y_pred + [(batch_Y_pred>0.5)*1.0]
 
 				# if batch_Y.shape[1] > 1:
-				# 	Y_label = Y_label + [np.argmax(batch_Y.detach().cpu().numpy(),axis=1).reshape((batch_Y_pred.shape[0],1))]
+				#   Y_label = Y_label + [np.argmax(batch_Y.detach().cpu().numpy(),axis=1).reshape((batch_Y_pred.shape[0],1))]
 				# else:
 				Y_label = Y_label + [batch_Y.detach().cpu().numpy()]
 			elif self.task == 'regression':
@@ -423,7 +424,7 @@ class GradRegTrainer():
 			Y_pred = np.vstack(Y_pred)
 			Y_label = np.hstack(Y_label)
 			print('shape: ',Y_pred.shape, Y_label.shape)
-			print(accuracy_score(Y_label, Y_pred),file=log)
+			print('Accuracy: ',accuracy_score(Y_label, Y_pred),file=log)
 			print(confusion_matrix(Y_label, Y_pred),file=log)
 			print(classification_report(Y_label, Y_pred),file=log)    
 		else:
@@ -482,13 +483,13 @@ class GradRegTrainer():
 		# self.visualize_trajectory(vis_ind[:9],"plots/{}_{}_base".format(self.seed,self.delta))
 		log = open("results_{}_{}.txt".format(self.model,self.data),"a")
 		print("#####################################",file=log)
-		print("Performance of the base classifier",file=log)
+		print("Performance of the base classifier")
 		self.eval_classifier(log=log)
 		self.classifier_optimizer = torch.optim.Adam(self.classifier.parameters(),self.lr)
 		if self.model == "GI" or self.model == "goodfellow":
 			self.finetune_grad_int(num_domains=self.num_finetune_domains)
-		# self.visualize_trajectory(vis_ind[:9],"plots/{}_{}_{}".format(self.seed,self.delta,self.goodfellow))
+			print("Performance after fine-tuning")
+			self.eval_classifier(log=log)
+				# self.visualize_trajectory(vis_ind[:9],"plots/{}_{}_{}".format(self.seed,self.delta,self.goodfellow))
 		
 		# print("-----------------------------------------",file=log)
-		print("Performance after fine-tuning",file=log)
-		self.eval_classifier(log=log)
