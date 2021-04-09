@@ -11,3 +11,5 @@
 
 ## Running the code
 Run `python3 -W ignore main.py --data <DS> --epoch_classifier <NUM> --epoch_finetune <NUM> --bs <NUM> --use_cuda --early_stopping --algo grad_reg` with the dataset name. 
+
+To run all the experiments, run the bash script `run_experiments_grad_reg.sh` followed by the bash script `gen_numbers.sh`. 
