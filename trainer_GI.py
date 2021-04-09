@@ -152,7 +152,8 @@ def adversarial_finetune(X, U, Y, delta, classifier, classifier_optimizer,classi
 	delta = delta.clamp(-1*delta_clamp, delta_clamp).detach().clone()
 	# print(step,writer is not None)
 	if writer is not None:
-		writer.add_histogram(string,delta.view(1,-1),step)
+		writer.add_scalar(string,torch.abs(delta).mean(),step)
+		writer.add_scalar(string+"_grad",torch.abs(partial_loss_delta).mean(),step)
 
 	# This block of code actually optimizes our model
 	U_grad = U.clone() - delta
@@ -238,10 +239,10 @@ class GradRegTrainer():
 		if args.model == "baseline":
 			from config_baseline import Config
 			config = Config(args)
-		elif args.model == "tbaseline" or args.model == "goodfellow":
+		elif args.model == "tbaseline" or args.model == "goodfellow" or args.model == "inc_finetune":
 			from config_tbaseline import Config
 			config = Config(args)
-		elif args.model == "GI":
+		elif args.model == "GI" or args.model == "t_inc_finetune" or args.model == "t_goodfellow" or args.model == "t_GI":
 			from config_GI import Config
 			config = Config(args)
 
@@ -271,6 +272,9 @@ class GradRegTrainer():
 		
 		self.classifier_loss_fn = config.classifier_loss_fn   #reconstruction_loss
 		self.task = config.loss_type
+
+
+		self.inc_finetune = self.model in ["inc_finetune","t_inc_finetune", "t_GI"]
 		
 		if args.encoder:
 			self.encoder = config.encoder(**config.encoder_kwargs).to(args.device)
@@ -296,15 +300,16 @@ class GradRegTrainer():
 		self.seed = args.seed
 
 
-	def train_classifier(self,past_dataset=None,encoder=None):
-			'''Train the classifier initially
-			
-			In its current form the function just trains a baseline model on the entire train data
-			
-			Keyword Arguments:
-				past_dataset {[type]} -- If this is not None, then the `past_dataset` is used to train the model (default: {None})
-				encoder {[type]} -- Encoder model to train (default: {None})
-			'''
+	def train_classifier(self,past_dataset=None,encoder=None,inc_finetune=False):
+		'''Train the classifier initially
+		
+		In its current form the function just trains a baseline model on the entire train data
+		
+		Keyword Arguments:
+			past_dataset {[type]} -- If this is not None, then the `past_dataset` is used to train the model (default: {None})
+			encoder {[type]} -- Encoder model to train (default: {None})
+		'''
+		if not self.inc_finetune:
 			class_step = 0
 			# for i in range(len(self.source_domain_indices)):
 			# if past_dataset is None:
@@ -322,6 +327,25 @@ class GradRegTrainer():
 					self.writer.add_scalar("loss/classifier",l.item(),class_step)
 				print("Epoch %d Loss %f"%(epoch,class_loss/len(past_data)),flush=False)
 			# past_dataset = None
+		else:
+			class_step = 0
+			for i in range(len(self.source_domain_indices)):
+			# if past_dataset is None:
+				# self.classifier_optimizer
+				past_data = ClassificationDataSet(indices=self.source_data_indices[i],**self.dataset_kwargs)
+				past_dataset = torch.utils.data.DataLoader((past_data),self.BATCH_SIZE,True)
+				for epoch in range(int(self.CLASSIFIER_EPOCHS*(1-(i/10)))):
+					class_loss = 0
+					for batch_X, batch_A, batch_U, batch_Y in tqdm(past_dataset):
+
+						# batch_X = torch.cat([batch_X,batch_U.view(-1,2)],dim=1)
+
+						l = train_classifier_batch(X=batch_X,dest_u=batch_U,dest_a=batch_U,Y=batch_Y,classifier=self.classifier,classifier_optimizer=self.classifier_optimizer,verbose=(class_step%20)==0,encoder=encoder, batch_size=self.BATCH_SIZE,loss_fn=self.classifier_loss_fn)
+						class_step += 1
+						class_loss += l
+						self.writer.add_scalar("loss/classifier",l.item(),class_step)
+					print("Epoch %d Loss %f"%(epoch,class_loss/len(past_data)),flush=False)
+
 
 	def finetune_grad_int(self, num_domains=2):
 		'''Finetunes using gradient interpolation
@@ -356,7 +380,7 @@ class GradRegTrainer():
 				for batch_X, _, batch_U, batch_Y in tqdm(past_dataset):
 
 					batch_U = batch_U.view(-1,1)
-					if self.model == "goodfellow":
+					if self.model == "goodfellow" or self.model == "t_goodfellow":
 						delta = (torch.zeros(batch_U.size()).float()).to(batch_X.device)
 						# TODO pass delta hyperparams here
 						l = adversarial_finetune_goodfellow(batch_X, batch_U, batch_Y, delta, self.classifier, self.classifier_optimizer,self.classifier_loss_fn,delta_lr=self.delta_lr,delta_clamp=self.delta_clamp,delta_steps=self.delta_steps,lambda_GI=self.lambda_GI,writer=self.writer,step=step,string="delta_{}".format(i))
@@ -483,12 +507,12 @@ class GradRegTrainer():
 		# self.visualize_trajectory(vis_ind[:9],"plots/{}_{}_base".format(self.seed,self.delta))
 		log = open("results_{}_{}.txt".format(self.model,self.data),"a")
 		print("#####################################",file=log)
-		print("Performance of the base classifier")
+		print("Performance of the base classifier",file=log)
 		self.eval_classifier(log=log)
 		self.classifier_optimizer = torch.optim.Adam(self.classifier.parameters(),self.lr)
-		if self.model == "GI" or self.model == "goodfellow":
+		if self.model == "GI" or self.model == "goodfellow" or self.model == "t_goodfellow" or self.model == "t_GI":
 			self.finetune_grad_int(num_domains=self.num_finetune_domains)
-			print("Performance after fine-tuning")
+			print("Performance after fine-tuning",file=log)
 			self.eval_classifier(log=log)
 				# self.visualize_trajectory(vis_ind[:9],"plots/{}_{}_{}".format(self.seed,self.delta,self.goodfellow))
 		
