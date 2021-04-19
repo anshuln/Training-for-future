@@ -128,14 +128,14 @@ def adversarial_finetune(X, U, Y, delta, classifier, classifier_optimizer,classi
 
 		partial_logit_pred_t = []
 		if len(Y_pred.shape)<2 or Y_pred.shape[1] < 2:
-			partial_Y_pred_t = torch.autograd.grad(Y_pred, U_grad, grad_outputs=torch.ones_like(Y_pred), retain_graph=True)[0]
+			partial_Y_pred_t = torch.autograd.grad(Y_pred, U_grad, grad_outputs=torch.ones_like(Y_pred), create_graph=True)[0]
 		else:           
 			for idx in range(Y_pred.shape[1]):
 				logit = Y_pred[:,idx].view(-1,1)
-				partial_logit_pred_t.append(torch.autograd.grad(logit, U_grad, grad_outputs=torch.ones_like(logit), retain_graph=True)[0])
+				partial_logit_pred_t.append(torch.autograd.grad(logit, U_grad, grad_outputs=torch.ones_like(logit), create_graph=True)[0])
 
 			
-				partial_Y_pred_t = torch.cat(partial_logit_pred_t, 1)
+			partial_Y_pred_t = torch.cat(partial_logit_pred_t, 1)
 
 
 		# partial_Y_pred_t = torch.autograd.grad(Y_pred, U_grad, grad_outputs=torch.ones_like(Y_pred), retain_graph=True)[0]
@@ -169,7 +169,7 @@ def adversarial_finetune(X, U, Y, delta, classifier, classifier_optimizer,classi
 			logit = Y_pred[:,idx].view(-1,1)
 			partial_logit_pred_t.append(torch.autograd.grad(logit, U_grad, grad_outputs=torch.ones_like(logit), retain_graph=True)[0])
 		#print(partial_logit_pred_t)
-			partial_Y_pred_t = torch.cat(partial_logit_pred_t, 1)
+		partial_Y_pred_t = torch.cat(partial_logit_pred_t, 1)
 
 	# partial_Y_pred_t = torch.cat(partial_logit_pred_t, 1)
 	#print(partial_Y_pred_t.shape)
