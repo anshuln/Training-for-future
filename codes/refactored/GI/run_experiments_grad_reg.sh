@@ -1,29 +1,82 @@
-for seed in 1 2 3 4 5 6 7 8 9 10
+for seed in 1 2 3 4 5 #6 7 8 9 10
 do
 	for delta in 0.0 #0.01 0.05 0.1 0.2 0.5
 	do
 		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --train_algo grad_reg --data house --epoch_classifier 15 --epoch_transform 5 --use_cuda --bs 1000 --delta $delta --seed $seed --early_stopping> temp_log;
-		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model baseline  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 1000  --seed $seed --use_cuda --early_stopping 
-		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model tbaseline  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 1000  --seed $seed --use_cuda --early_stopping 
+		CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model baseline  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 1000  --seed $seed --use_cuda --early_stopping 
+		CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model tbaseline  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 1000  --seed $seed --use_cuda --early_stopping 
 		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model goodfellow  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 1000  --seed $seed --use_cuda --early_stopping 
-		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 1000  --seed $seed --use_cuda --early_stopping --goodfellow
+		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 500  --seed $seed --use_cuda --early_stopping
 
 		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model tbaseline  --data mnist --epoch_classifier 60  --epoch_finetune 25  --bs 250  --seed $seed --use_cuda --early_stopping 
 		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model baseline  --data mnist --epoch_classifier 60  --epoch_finetune 25  --bs 250  --seed $seed --use_cuda --early_stopping 
 		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model goodfellow  --data mnist --epoch_classifier 60  --epoch_finetune 25  --bs 250  --seed $seed --use_cuda --early_stopping 
-		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI  --data mnist --epoch_classifier 45  --epoch_finetune 25  --bs 250  --seed $seed --use_cuda --early_stopping 		
+		# CUDA_VISIBLE_DEVICES=0 python3 -W ignore main.py --model GI  --data mnist --epoch_classifier 45  --epoch_finetune 25  --bs 100  --seed $seed --use_cuda --early_stopping      
 
 
 		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --train_algo grad_reg --data house --epoch_classifier 15 --epoch_transform 5 --use_cuda --bs 1000 --delta $delta --seed $seed --early_stopping> temp_log;
 		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model inc_finetune  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 1000  --seed $seed --use_cuda --early_stopping 
 		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model t_inc_finetune  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 1000  --seed $seed --use_cuda --early_stopping 
 		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model t_goodfellow  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 1000  --seed $seed --use_cuda --early_stopping 
-		CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model t_GI  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 1000  --seed $seed --use_cuda --early_stopping 
+		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model t_GI  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 1000  --seed $seed --use_cuda --early_stopping 
+		CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model grad_reg  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 500  --seed $seed --use_cuda --early_stopping 
+		CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model grad_reg_curvature  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 500  --seed $seed --use_cuda --early_stopping
+		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 1000  --seed $seed --use_cuda --early_stopping
+		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI_t_delta  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 500  --seed $seed --use_cuda --early_stopping
 
+		# for trelu_limit in 1 2  
+		# do
+		# 	CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 1000  --seed $seed --use_cuda --early_stopping --trelu_limit $trelu_limit
+		# 	CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 1000  --seed $seed --use_cuda --early_stopping --trelu_limit $trelu_limit --single_trelu
+		# done
+		for delta in -0.1 -0.05 -0.01 0.01 0.05 0.1
+		do
+			CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model fixed_GI  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 250  --seed $seed --use_cuda --early_stopping --delta $delta	
+			for k in 2 5 10
+			do
+				CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI_num_int  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 250  --seed $seed --use_cuda --early_stopping --delta $delta	--max_k $k
+			done
+				CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI_v3  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 250  --seed $seed --use_cuda --early_stopping --delta $delta 
+		done
+
+
+		CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 250  --seed $seed --use_cuda --early_stopping --ensemble
+		CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI  --data house --epoch_classifier 25  --epoch_finetune 10  --bs 250  --seed $seed --use_cuda --early_stopping --time_softmax
+	
+		# done
 		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model inc_finetune  --data mnist --epoch_classifier 80  --epoch_finetune 20  --bs 250  --seed $seed --use_cuda --early_stopping 
 		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model t_inc_finetune  --data mnist --epoch_classifier 80  --epoch_finetune 20  --bs 250  --seed $seed --use_cuda --early_stopping 
 		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model t_goodfellow  --data mnist --epoch_classifier 80  --epoch_finetune 20  --bs 250  --seed $seed --use_cuda --early_stopping 
-		CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model t_GI  --data mnist --epoch_classifier 80  --epoch_finetune 20  --bs 250  --seed $seed --use_cuda --early_stopping 
+		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model t_GI  --data mnist --epoch_classifier 80  --epoch_finetune 20  --bs 250  --seed $seed --use_cuda --early_stopping 
+		# CUDA_VISIBLE_DEVICES=0 python3 -W ignore main.py --model grad_reg  --data mnist --epoch_classifier 45  --epoch_finetune 25  --bs 100  --seed $seed --use_cuda --early_stopping      
+		# CUDA_VISIBLE_DEVICES=0 python3 -W ignore main.py --model grad_reg_curvature  --data mnist --epoch_classifier 45  --epoch_finetune 25  --bs 100  --seed $seed --use_cuda --early_stopping  
+			# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI_t_delta  --data mnist --epoch_classifier 80  --epoch_finetune 20  --bs 250  --seed $seed --use_cuda --early_stopping --delta $delta	
+
+		# for trelu_limit in 0 1 2 3 4 5
+		# do
+		# 	CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI  --data mnist --epoch_classifier 80  --epoch_finetune 20  --bs 250  --seed $seed --use_cuda --early_stopping --trelu_limit $trelu_limit
+		# 	CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI  --data mnist --epoch_classifier 80  --epoch_finetune 20  --bs 250  --seed $seed --use_cuda --early_stopping --trelu_limit $trelu_limit --single_trelu
+
+		# done
+
+		# for delta in -0.1 -0.05 -0.01 0.01 0.05 0.1
+		# do
+		# 	CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model fixed_GI  --data mnist --epoch_classifier 80  --epoch_finetune 20  --bs 250  --seed $seed --use_cuda --early_stopping --delta $delta	
+		# done
+
+
+		# for delta in -0.1 -0.05 -0.01 0.01 0.05 0.1
+		# do
+		# 	for k in 2 5 10
+		# 	do
+		# 		CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI_num_int  --data mnist --epoch_classifier 60  --epoch_finetune 20  --bs 250  --seed $seed --use_cuda --early_stopping --delta $delta	--max_k $k
+		# 	done
+		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI_v3  --data mnist --epoch_classifier 80  --epoch_finetune 20  --bs 250  --seed $seed --use_cuda --early_stopping --delta $delta 
+
+		# done
+
+		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI  --data mnist --epoch_classifier 60  --epoch_finetune 20  --bs 100  --seed $seed --use_cuda --early_stopping --ensemble
+		# CUDA_VISIBLE_DEVICES=1 python3 -W ignore main.py --model GI  --data mnist --epoch_classifier 60  --epoch_finetune 20  --bs 100  --seed $seed --use_cuda --early_stopping --time_softmax
 		# echo $seed $delta | tee -a results_grad.txt;
 		# grep "MAE:" temp_log | tee -a results_grad.txt;
 		# grep "MSE:" temp_log | tee -a results_grad.txt;

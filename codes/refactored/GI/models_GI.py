@@ -47,9 +47,11 @@ class TimeReLU(nn.Module):
 	A ReLU with threshold and alpha as a function of domain indices.
 	'''
 
-	def __init__(self, data_shape, time_shape, leaky=False,use_time=True):
+	def __init__(self, data_shape, time_shape, leaky=False,use_time=True , ignore_data_shape=False):
 		
 		super(TimeReLU,self).__init__()
+		if ignore_data_shape:
+			data_shape = 1
 		self.leaky = leaky
 		# self.model = nn.Linear(time_shape,data_shape)
 		self.use_time = use_time
@@ -79,25 +81,27 @@ class TimeReLU(nn.Module):
 			return self.relu(X)
 		if len(times.size()) == 3:
 			times = times.squeeze(2)
-		thresholds = self.model_1((self.model_0(times)))
+		thresholds = self.model_1(self.relu(self.model_0(times)))
 		# thresholds = self.model(times)
 
 		if self.leaky:
-			alphas = self.model_alpha_1((self.model_alpha_0(times)))
+			alphas = self.model_alpha_1(self.relu(self.model_alpha_0(times)))
 			# alphas = self.model_alpha(times)
 		else:
 			alphas = 0.0
-		X = torch.where(X>thresholds,X-thresholds,alphas*(X-thresholds))
+		X = torch.where(X>thresholds,X,alphas*(X-thresholds) + thresholds)
 		# X = torch.where(X>thresholds, X-thresholds,alphas*(X-thresholds))
 		return X
 
 class TimeReLUCNN(nn.Module):
 
-	def __init__(self, data_shape, time_shape, leaky=False,use_time=True):
+	def __init__(self, data_shape, time_shape, leaky=False,use_time=True, ignore_data_shape=False):
 		
 		super(TimeReLUCNN,self).__init__()
 		self.leaky = leaky
 		self.use_time = use_time
+		if ignore_data_shape:
+			data_shape = 1
 		# print("RELU - {}".format(self.use_time))
 		if use_time:
 			self.model_0 = nn.Linear(time_shape, 16)
@@ -130,7 +134,7 @@ class TimeReLUCNN(nn.Module):
 			return self.model(X) 
 
 		if len(times.size()) == 3:
-			times = times.squeeze(2)		
+			times = times.squeeze(2)        
 		orig_shape = X.size()
 		# print(orig_shape)
 		#X = X.view(orig_shape[0],-1)
@@ -146,7 +150,7 @@ class TimeReLUCNN(nn.Module):
 		thresholds = thresholds[:,:,None,None]
 		alphas = alphas[:,:,None,None]
 		# print("Thresh",thresholds.shape,X.size())
-		X = torch.where(X>thresholds,X-thresholds,alphas*(X-thresholds))
+		X = torch.where(X>thresholds,X,alphas*(X-thresholds)+thresholds)
 		# print(X.size())
 		#print(X.shape)
 		#X = X.view(*list(orig_shape))
@@ -188,7 +192,9 @@ class PredictionModel(nn.Module):
 		nn.init.kaiming_normal_(self.layer_2.weight)
 		nn.init.zeros_(self.layer_2.bias)
 
-	def forward(self, X, times,logits=False):
+
+		self.delta_f = nn.Parameter(torch.ones(1,out_shape))
+	def forward(self, X, times,logits=False,delta=0.0):
 		
 		if len(times.size()) == 3:  
 			times = times.squeeze(1)
@@ -202,6 +208,8 @@ class PredictionModel(nn.Module):
 		X = self.relu_1(self.layer_1(X), times)
 		#X = self.relu_2(self.layer_2(X), times)
 		X = self.layer_2(X)
+
+		X = X + self.delta_f * delta
 
 		if not logits:
 			X = torch.sigmoid(X)
@@ -225,6 +233,9 @@ class ClassifyNetHuge(nn.Module):
 		self.time_shape = 1
 		self.append_time = kwargs['append_time'] if kwargs.get('append_time') else False
 
+		self.trelu_limit = kwargs['trelu_limit'] if kwargs.get('trelu_limit') else 1000
+		self.single_trelu = kwargs['single_trelu'] if kwargs.get('single_trelu') else False
+
 		if use_time2vec:
 			self.time_shape = 1
 			self.time2vec = Time2Vec(1,8)
@@ -239,13 +250,17 @@ class ClassifyNetHuge(nn.Module):
 		self.hidden_shapes = hidden_shapes
 		self.output_shape = output_shape
 		
+		trelu_counter = 0
+		num_layers = len(self.hidden_shapes) + 1
+		self.trelu_limit = num_layers - self.trelu_limit - 1
 		if len(self.hidden_shapes) == 0:
 
 			self.layers.append(nn.Linear(input_shape, output_shape))
-			if self.time_conditioning:
-				self.relus.append(TimeReLU(data_shape=output_shape,time_shape=self.time_shape))
+			if self.time_conditioning and trelu_counter > self.trelu_limit:
+				self.relus.append(TimeReLU(data_shape=output_shape,time_shape=self.time_shape,ignore_data_shape=self.single_trelu, leaky=self.leaky))
 			else:
 				self.relus.append(nn.LeakyReLU())
+			trelu_counter += 1
 
 		else:
 			if use_time2vec:
@@ -254,28 +269,42 @@ class ClassifyNetHuge(nn.Module):
 			else:
 				self.layers.append(nn.Linear(self.input_shape, self.hidden_shapes[0]))
 
-			if self.time_conditioning:
-				self.relus.append(TimeReLU(data_shape=self.hidden_shapes[0],time_shape=self.time_shape))
+			if self.time_conditioning and trelu_counter > self.trelu_limit:
+				self.relus.append(TimeReLU(data_shape=self.hidden_shapes[0],time_shape=self.time_shape,ignore_data_shape=self.single_trelu, leaky=self.leaky))
 			else:
 				self.relus.append(nn.LeakyReLU())
+			trelu_counter += 1
 
 			for i in range(len(self.hidden_shapes) - 1):
 
 				self.layers.append(nn.Linear(self.hidden_shapes[i], self.hidden_shapes[i+1]))
-				if self.time_conditioning:
-					self.relus.append(TimeReLU(data_shape=self.hidden_shapes[i+1],time_shape=self.time_shape))
+				if self.time_conditioning and trelu_counter > self.trelu_limit:
+					self.relus.append(TimeReLU(data_shape=self.hidden_shapes[i+1],time_shape=self.time_shape,ignore_data_shape=self.single_trelu, leaky=self.leaky))
 				else:
 					self.relus.append(nn.LeakyReLU())
+				trelu_counter += 1
 
 			self.layers.append(nn.Linear(self.hidden_shapes[-1],self.output_shape))
-			if self.time_conditioning:
-				self.relus.append(TimeReLU(data_shape=output_shape,time_shape=self.time_shape))
+			if self.time_conditioning and trelu_counter > self.trelu_limit:
+				self.relus.append(TimeReLU(data_shape=output_shape,time_shape=self.time_shape,ignore_data_shape=self.single_trelu, leaky=self.leaky))
 			else:
 				self.relus.append(nn.LeakyReLU())
+			trelu_counter += 1
+
+		if (kwargs['time_softmax'] if kwargs.get('time_softmax') else False):
+			self.time_softmax = nn.Linear(self.time_shape,self.output_shape)
+		else:
+			self.time_softmax = None
+
+
+		if (kwargs['add_delta_f'] if kwargs.get('add_delta_f') else False):
+			self.delta_f = nn.Parameter(torch.ones(1,output_shape))
+		else:
+			self.delta_f = None 
 
 		self.apply(init_weights)
 
-	def forward(self,X,times=None,logits=False):
+	def forward(self,X,times=None,logits=False,delta=0.0):
 		if self.append_time :  # i.e. we use time as an input directly as well. Note that X should not have any time features for this to work!
 			X = torch.cat([X,times.view(-1,1)],dim=-1)
 		if self.time2vec is not None:
@@ -293,10 +322,18 @@ class ClassifyNetHuge(nn.Module):
 			else:
 				X = self.relus[i](X)
 
+		if self.time_softmax is not None:
+			X = X + self.time_softmax(times)
+
+		if self.delta_f is not None:
+			X = X + self.delta_f * delta
+
+
 		if self.regress:
 			X = torch.relu(X)
 		else:
 			X = torch.softmax(X,dim=1)
+
 
 		return X        
 
@@ -349,6 +386,8 @@ class ResNet(nn.Module):
 
 		self.in_channels = 16
 		self.append_time = kwargs['append_time'] if kwargs.get('append_time') else False
+		self.trelu_limit = kwargs['trelu_limit'] if kwargs.get('trelu_limit') else 1000
+		self.single_trelu = kwargs['single_trelu'] if kwargs.get('single_trelu') else False
 
 		self.conv = nn.Conv2d(in_channels=1, out_channels=16, kernel_size=3, padding=1, bias=False)
 		self.bn = nn.BatchNorm2d(16)
@@ -367,7 +406,7 @@ class ResNet(nn.Module):
 		else:
 			self.fc1 = nn.Linear(128 * 7 * 7, 256)
 
-		self.fc2 = nn.Linear(256, 10)
+		self.fc2 = nn.Linear(256, output_dim)
 		
 
 		if use_t2v:
@@ -381,11 +420,23 @@ class ResNet(nn.Module):
 		#self.relu_2 = TimeReLUCNN(32 * 14 * 14, self.time_shape, True)
 		#self.relu_3 = TimeReLUCNN(64 * 7 * 7, self.time_shape, True)
 		self.use_time_relu = kwargs['time_conditioning'] if kwargs.get('time_conditioning') else False
-		self.relu_conv1 = TimeReLUCNN(16, self.time_shape, True,self.use_time_relu)
-		self.relu_conv2 = TimeReLUCNN(32, self.time_shape, True,self.use_time_relu)
-		self.relu_conv3 = TimeReLUCNN(64, self.time_shape, True,self.use_time_relu)
-		self.relu_conv4 = TimeReLUCNN(128, self.time_shape, True,self.use_time_relu)
-		self.relu_fc1 = TimeReLU(256, self.time_shape, True,self.use_time_relu)
+
+		self.relu_conv1 = TimeReLUCNN(16, self.time_shape, True,self.use_time_relu and self.trelu_limit > 4,ignore_data_shape=self.single_trelu)
+		self.relu_conv2 = TimeReLUCNN(32, self.time_shape, True,self.use_time_relu and self.trelu_limit > 3,ignore_data_shape=self.single_trelu)
+		self.relu_conv3 = TimeReLUCNN(64, self.time_shape, True,self.use_time_relu and self.trelu_limit > 2,ignore_data_shape=self.single_trelu)
+		self.relu_conv4 = TimeReLUCNN(128, self.time_shape, True,self.use_time_relu and self.trelu_limit > 1,ignore_data_shape=self.single_trelu)
+		self.relu_fc1 = TimeReLU(256, self.time_shape, True,self.use_time_relu and self.trelu_limit > 0,ignore_data_shape=self.single_trelu)
+
+		if (kwargs['time_softmax'] if kwargs.get('time_softmax') else False):
+			self.time_softmax = nn.Linear(self.time_shape,output_dim)
+		else:
+			self.time_softmax = None
+
+
+		if (kwargs['add_delta_f'] if kwargs.get('add_delta_f') else False):
+			self.delta_f = nn.Parameter(torch.zeros(1,output_dim).uniform_(-0.1,0.1))
+		else:
+			self.delta_f = None
 
 	def make_layer(self, block, out_channels, blocks, stride=1):
 		downsample = None
@@ -400,7 +451,7 @@ class ResNet(nn.Module):
 			layers.append(block(out_channels, out_channels))
 		return nn.Sequential(*layers)
 
-	def forward(self, x, times=None,logits=False):
+	def forward(self, x, times=None,logits=False, delta=0.0):
 		#times_ = times.unsqueeze(2).repeat(1,28,28)[:, None, :, :]
 		#x = torch.cat([x, times_], dim=1)
 		if self.t2v is not None:
@@ -410,6 +461,7 @@ class ResNet(nn.Module):
 		out = self.conv(x)
 		out = self.bn(out)
 		out = self.layer1(out)
+
 		out = self.relu_conv1(out, times)
 		out = self.dropout(out)
 		#print('L1:', out.shape)
@@ -436,6 +488,14 @@ class ResNet(nn.Module):
 		out = self.fc1(out)
 		out = self.relu_fc1(out, times)
 		out = self.fc2(out)
+
+		if self.time_softmax is not None:
+			out = out + self.time_softmax(times)
+		
+		if self.delta_f is not None:
+			out = out + delta * self.delta_f
+			# print(self.delta_f,delta,out.size())
+
 		if not logits:
 			out = torch.softmax(out,dim=-1)
 		return out
