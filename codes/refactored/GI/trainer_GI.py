@@ -22,10 +22,10 @@ from sklearn.metrics import accuracy_score, confusion_matrix, classification_rep
 from torchviz import make_dot
 import time 
 
-np.set_printoptions(precision = 3)
+# np.set_printoptions(precision = 3)
 
-
-def visualize_single(x,u,classifier):
+np. set_printoptions(suppress=True)
+def visualize_single(x,u,y,classifier, _delta,title):
 	x_ = []
 	y_ = []
 	y__ = []
@@ -49,18 +49,22 @@ def visualize_single(x,u,classifier):
 
 
 		# TODO gradient addition business
-	plt.plot(x_,y_)
+	# plt.plot(x_,y_)
 	# plt.plot(x_,y__)
-	grad = np.array(y__)
-	grad = grad[1:] - grad[:-1]
-	grad = grad/0.002
-	print(y_,grad)
+	plt.plot(x_,y___)
+	plt.axvline(actual_time-_delta)
+	plt.axhline(y)
+	# grad = np.array(y__)
+	# grad = grad[1:] - grad[:-1]
+	# grad = grad/0.002
+	# print(y_,grad)
 	# plt.plot(x_,y___)
 	# plt.plot(x_[1:],grad)
 	# plt.ylim(-10,10)
 	# plt.set_title("time-{}".format(actual_time))
-	plt.savefig('plot.png')
-	assert False
+	plt.savefig('{}.png'.format(title))
+	plt.clf()
+	# assert False
 
 
 def train_classifier_batch(X,dest_u,dest_a,Y,classifier,classifier_optimizer,batch_size,verbose=False,encoder=None, transformer=None,source_u=None, kernel=None,loss_fn=classification_loss):
@@ -98,13 +102,17 @@ def train_classifier_batch(X,dest_u,dest_a,Y,classifier,classifier_optimizer,bat
 
 	# if verbose:
 	#   with torch.no_grad():
-	#       print(torch.cat([Y_pred[:20],Y[:20].view(-1,1).float(),pred_loss[:20].view(-1,1)],dim=1).detach().cpu().numpy(),file=log)
+	#     print(torch.cat([Y_pred[:20],Y[:20].view(-1,1).float(),pred_loss[:20].view(-1,1)],dim=1).detach().cpu().numpy(),file=log)
 
 	if kernel is not None:
 		pred_loss = pred_loss * kernel
-	pred_loss = pred_loss.sum()/batch_size
+	pred_loss = pred_loss.mean()  #/batch_size
 	pred_loss.backward()
 	classifier_optimizer.step()
+	
+	# val,ind = Y_pred.max(dim=-1)
+
+	# print(torch.cat([val.view(-1,1),ind.view(-1,1),Y.view(-1,1)],dim=1))
 	
 
 
@@ -168,23 +176,53 @@ def finetune(X, U, Y, delta, classifier, classifier_optimizer,classifier_loss_fn
 
 	return pred_loss
 
-	# U_grad = U.clone() - delta
-	# U_grad.requires_grad_(True)
-	# # Y_pred = classifier(torch.cat([X[:,:-2],X[:,-2].view(-1,1)-delta.view(-1,1),U_grad.view(-1,1)],dim=1), U_grad)
-	# Y_pred = classifier(X,U_grad,logits=True)
-	# partial_Y_pred_t = torch.autograd.grad(Y_pred, U_grad, grad_outputs=torch.ones_like(Y_pred), retain_graph=True)[0]
+
+
+def finetune_GIL(X, U, Y, delta, classifier, classifier_optimizer,classifier_loss_fn,writer=None,step=None, **kwargs):
+	'''Finetunes model using gradient interpolation with given `delta`
 	
-
-	# Y_pred = Y_pred + delta * partial_Y_pred_t
-
-	# if Y_pred.size(-1) > 1:  # Not regression, in this case we need to apply softmax to the logits
-	#   Y_pred = torch.softmax(Y_pred,dim=-1)
-	# pred_loss = classifier_loss_fn(Y_pred,Y).mean()
-	# pred_loss.backward()
+	[description]
 	
-	# classifier_optimizer.step()
+	Arguments:
+		X {[type]} -- Datapoints
+		U {[type]} -- Time indices
+		Y {[type]} -- Labes
+		delta {[type]} -- 
+		classifier {[type]} -- Model
+		classifier_optimizer {[type]} -- Optimizer
+		classifier_loss_fn {[type]} -- Loss function, can be MSE, MAE, CE etc
+	
+	Keyword Arguments:
+		writer {[type]} -- Tensorboard writer
+		step {[type]} -- Step for tensorboard writer
+	
+	'''
 
-	# return pred_loss
+	classifier_optimizer.zero_grad()
+
+	U_grad = U.clone() - delta
+	U_grad.requires_grad_(True)
+	Y_pred = classifier(X, U_grad, logits=True)
+
+	if len(Y_pred.shape)>1 and Y_pred.shape[1] > 1:
+		Y_pred = torch.softmax(Y_pred,dim=-1)
+
+	loss = classifier_loss_fn(Y_pred,Y)
+
+	del_loss = torch.autograd.grad(loss,U_grad,grad_outputs=torch.ones_like(loss),create_graph=True)[0]
+	# print(del_loss.mean())
+
+	loss_GIL = loss + delta*del_loss
+
+	Y_orig_pred = classifier(X,U)
+	pred_loss = loss_GIL.mean() + 0.5*classifier_loss_fn(Y_orig_pred,Y).mean() #+ 5*(partial_Y_pred_t**2).mean()
+	pred_loss.backward()
+	
+	classifier_optimizer.step()
+
+	return pred_loss
+
+
 
 
 def additive_finetune(X, U, Y, delta, classifier, classifier_optimizer,classifier_loss_fn,delta_lr=0.1,delta_clamp=0.15,delta_steps=10,lambda_GI=0.5,writer=None,step=None,string=None):
@@ -212,7 +250,7 @@ def additive_finetune(X, U, Y, delta, classifier, classifier_optimizer,classifie
 
 
 
-def adversarial_finetune(X, U, Y, delta, classifier, classifier_optimizer,classifier_loss_fn,delta_lr=0.1,delta_clamp=0.15,delta_steps=10,lambda_GI=0.5,writer=None,step=None,string=None):
+def adversarial_finetune(X, U, Y, delta, classifier, classifier_optimizer,classifier_loss_fn,delta_lr=0.1,delta_clamp=0.15,delta_steps=10,lambda_GI=0.5,writer=None,step=None,string=None, verbose=False):
 	
 	classifier_optimizer.zero_grad()
 	
@@ -265,6 +303,8 @@ def adversarial_finetune(X, U, Y, delta, classifier, classifier_optimizer,classi
 		#   print('{} {}'.format(ii, delta.cpu().clone().detach().numpy()))
 	delta = delta.clamp(-1*delta_clamp, delta_clamp).detach().clone()
 	# print(ii,delta)
+	idx = np.random.randint(0,len(X))
+	# visualize_single(X[idx],U[idx],Y[idx],classifier,delta.item(),"plots/{}-{}".format(step,delta.item()))
 	d2 = delta.detach().cpu().numpy()
 	# print(np.hstack([d1,d2]))
 	# print(step,writer is not None)
@@ -303,6 +343,12 @@ def adversarial_finetune(X, U, Y, delta, classifier, classifier_optimizer,classi
 	Y_orig_pred = classifier(X,U)
 	pred_loss = classifier_loss_fn(Y_pred,Y).mean() + lambda_GI*classifier_loss_fn(Y_orig_pred,Y).mean() #+ 5*(partial_Y_pred_t**2).mean()
 	# print(pred_loss,Y_pred.size(),Y.size(),classifier_loss_fn(Y_pred,Y).size())
+
+	# if verbose:
+	#   with torch.no_grad():
+	#       print(ii,delta)
+	#       print(torch.cat([Y_pred[:20],Y_orig_pred[:20],Y[:20].view(-1,1).float()],dim=1).detach().cpu().numpy())
+	#       print(pred_loss)
 	pred_loss.backward()
 	
 	classifier_optimizer.step()
@@ -408,56 +454,99 @@ def finetune_gradient_regularization_curvature(X, U, Y, delta, classifier, class
 
 	return pred_loss    
 
-
-def select_delta(X, U, Y, delta, classifier, classifier_optimizer,classifier_loss_fn,delta_lr=0.1,delta_clamp=0.15,delta_steps=10,lambda_GI=0.5,writer=None,step=None,string=None):
+def stepwise_finetune(X, A, Y, delta, classifier, classifier_optimizer,classifier_loss_fn,delta_lr=0.1,delta_clamp=0.15,delta_steps=10,lambda_GI=0.5,writer=None,step=None,string=None,num_int='trap',tot_steps=3):
 
 	classifier_optimizer.zero_grad()
-	delta = delta.detach().clone()
-	delta.requires_grad_(True)
-	
-	# This block of code computes delta adversarially
-	d1 = delta.detach().cpu().numpy()
-	for ii in range(delta_steps):
+	# delta.requires_grad_(True)
 
-		U_grad = U.clone() - delta
-		U_grad.requires_grad_(True)
-		Y_pred = classifier(X, U_grad, logits=True)
-		if len(Y.shape)>1 and Y.shape[1] > 1:
-			Y_true = torch.argmax(Y, 1).view(-1,1).float()
+	dfdts = []
+	dfdts_reduced = []
 
-		partial_logit_pred_t = []
-		if len(Y_pred.shape)<2 or Y_pred.shape[1] < 2:
-			partial_Y_pred_t = torch.autograd.grad(Y_pred, U_grad, grad_outputs=torch.ones_like(Y_pred), retain_graph=True,create_graph=True)[0]
-		else:           
-			for idx in range(Y_pred.shape[1]):
-				logit = Y_pred[:,idx].view(-1,1)
-				partial_Y_pred_t.append(torch.autograd.grad(logit, U_grad, grad_outputs=torch.ones_like(logit), retain_graph=True)[0])
 
+	'''
+	Perform stepwise Gradient Interpolation
+	'''
+	if num_int == 'rk4':
+
+		inter_steps = tot_steps*2 + 1
+		A_grads = []
+
+		for ii in range(inter_steps):
+
+			A_grads.append(A.clone() - 0.5 * (inter_steps - ii -1) * delta) # Precompute all intermediate gradients
 			
-			partial_Y_pred_t = torch.cat(partial_logit_pred_t, 1)
+			A_grads[ii].requires_grad_(True)
+			Y_pred = classifier(X, A_grads[ii], logits=True)
+			partial_logit_pred_t = []
 
+			if len(Y_pred.shape)<2 or Y_pred.shape[1] < 2:
+				partial_Y_pred_t = torch.autograd.grad(Y_pred, A_grads[ii], grad_outputs=torch.ones_like(Y_pred), create_graph=True)[0]
+			else:
+				for idx in range(Y_pred.shape[1]):
+					logit = Y_pred[:,idx].view(-1,1)
+					partial_logit_pred_t.append(torch.autograd.grad(logit, A_grads[ii], grad_outputs=torch.ones_like(logit), retain_graph=True)[0])
+				#print(partial_logit_pred_t)
+				partial_Y_pred_t = torch.cat(partial_logit_pred_t, 1)
+			# partial_Y_pred_t = torch.autograd.grad(Y_pred, A_grads[ii], grad_outputs=torch.ones_like(Y_pred), create_graph=True, retain_graph=True)[0]
+			dfdts.append(partial_Y_pred_t)
+			if ii > 0 and ii % 2 == 0:
+				dfdts_reduced.append((dfdts[ii-2] + 4 * dfdts[ii-1] + dfdts[ii])/6) # Runge Kutta 4th order like factor
 
-		# partial_Y_pred_t = torch.autograd.grad(Y_pred, U_grad, grad_outputs=torch.ones_like(Y_pred), retain_graph=True)[0]
-		# partial_Y_pred_t.requires_grad_(True)
-		# print(Y_pred.size(),partial_Y_pred_t.size(),delta.size())
-		partial_Y_pred_t = partial_Y_pred_t.view(Y_pred.size())
-		# print((delta * partial_Y_pred_t).size(),partial_Y_pred_t.size())
-		Y_pred = Y_pred + delta * partial_Y_pred_t
+		dfdts_reduced.append(torch.zeros_like(dfdts_reduced[-1]))
+		pred_loss = 0
 
+	elif num_int == 'trap':
+
+		inter_steps = tot_steps+1
+		A_grads = []
+
+		for ii in range(inter_steps):
+
+			A_grads.append(A.clone() - (tot_steps - ii) * delta) # Precompute all intermediate gradients
+			
+			A_grads[ii].requires_grad_(True)
+			Y_pred = classifier(X, A_grads[ii], logits=True)
+			partial_logit_pred_t = []
+			if len(Y_pred.shape)<2 or Y_pred.shape[1] < 2:
+				partial_Y_pred_t = torch.autograd.grad(Y_pred, A_grads[ii], grad_outputs=torch.ones_like(Y_pred), create_graph=True)[0]
+			else:
+				for idx in range(Y_pred.shape[1]):
+					logit = Y_pred[:,idx].view(-1,1)
+					partial_logit_pred_t.append(torch.autograd.grad(logit, A_grads[ii], grad_outputs=torch.ones_like(logit), retain_graph=True)[0])
+				#print(partial_logit_pred_t)
+				partial_Y_pred_t = torch.cat(partial_logit_pred_t, 1)
+			# partial_Y_pred_t = torch.autograd.grad(Y_pred, A_grads[ii], grad_outputs=torch.ones_like(Y_pred), create_graph=True, retain_graph=True)[0]
+			dfdts.append(partial_Y_pred_t)
+			if ii > 0:
+				dfdts_reduced.append((dfdts[ii-1] + dfdts[ii])/2) # Trapezoidal integration
+
+		dfdts_reduced.append(torch.zeros_like(dfdts_reduced[-1]))
+		pred_loss = 0
+
+	for ii in range(tot_steps+1):
+
+		A_grad = A.clone() - (tot_steps-ii) * delta
+		Y_pred = classifier(X, A_grad, logits=True)
+
+		for jj in range(ii, tot_steps):
+			Y_pred += delta * dfdts_reduced[jj]
+
+		# Y_pred = torch.sigmoid(Y_pred)
+		#print(Y.shape, Y_pred.shape)
+		#print('--------')
+		#print(pred_loss)
 		if len(Y_pred.shape)>1 and Y_pred.shape[1] > 1:
 			Y_pred = torch.softmax(Y_pred,dim=-1)
-		# loss = -torch.mean(Y_true * torch.log(Y_pred + 1e-9))
-		loss = classifier_loss_fn(Y_pred,Y)
-		partial_loss_delta = torch.autograd.grad(loss, delta, grad_outputs=torch.ones_like(loss), retain_graph=True)[0]
 
-		delta = delta + delta_lr*partial_loss_delta
-# 
-		# print(torch.cat([loss.view(-1,1),y_grad.view(-1,1),partial_loss_delta,partial_Y_pred_t.view(-1,1), p.view(-1,1),(torch.sqrt(loss)*y_grad.squeeze()).view(-1,1)],dim=1))
-		# with torch.no_grad():
-		#   print('{} {}'.format(ii, delta.cpu().clone().detach().numpy()))
-	
-	delta = delta.clamp(-1*delta_clamp, delta_clamp).detach().clone()
-	return delta
+		pred_loss += classifier_loss_fn(Y_pred, Y).mean()
+
+	pred_loss /= tot_steps
+
+	pred_loss.backward()
+	classifier_optimizer.step()
+
+	return pred_loss
+
 
 
 def finetune_num_int(X, U, Y, delta, k, classifier, classifier_optimizer,classifier_loss_fn,writer=None,step=None, **kwargs):
@@ -513,6 +602,171 @@ def finetune_num_int(X, U, Y, delta, k, classifier, classifier_optimizer,classif
 	return pred_loss
 
 
+
+
+# def finetune_KL(X, U, Y, delta, classifier, classifier_optimizer,classifier_loss_fn,writer=None,step=None, **kwargs):
+
+
+#   classifier_optimizer.zero_grad()
+#   if len(U.size()) == 3:
+#       U = U.squeeze(-1)
+#   Y_orig_pred = classifier(X,U)
+
+#   U_grad = U.clone() - delta
+#   U_grad.requires_grad_(True)
+#   Y_pred = classifier(X, U_grad, logits=True)
+
+#   partial_logit_pred_t = []
+
+#   if len(Y_pred.shape)<2 or Y_pred.shape[1] < 2:
+#       partial_Y_pred_t = torch.autograd.grad(Y_pred, U_grad, grad_outputs=torch.ones_like(Y_pred), create_graph=True)[0]
+#   else:
+#       for idx in range(Y_pred.shape[1]):
+#           logit = Y_pred[:,idx].view(-1,1)
+#           partial_logit_pred_t.append(torch.autograd.grad(logit, U_grad, grad_outputs=torch.ones_like(logit), create_graph=True)[0])
+#       #print(partial_logit_pred_t)
+#       partial_Y_pred_t = torch.cat(partial_logit_pred_t, 1)
+
+#   # partial_Y_pred_t = torch.cat(partial_logit_pred_t, 1)
+#   #print(partial_Y_pred_t.shape)
+#   # partial_Y_pred_t = torch.autograd.grad(Y_pred, U_grad, grad_outputs=torch.ones_like(Y_pred), retain_graph=True)[0]
+#   # print(Y_pred.size(),partial_Y_pred_t.size(),U.size())
+#   Y_pred = Y_pred + delta * partial_Y_pred_t
+#   if len(Y_pred.shape)>1 and Y_pred.shape[1] > 1:
+#       Y_pred = torch.softmax(Y_pred,dim=-1)
+#   # Y_true = Y
+#   #Y_true = torch.argmax(Y, 1).view(-1,1).float()
+
+	
+#   # pred_loss = -torch.mean(Y_true * torch.log(Y_pred + 1e-9))# + (1 - Y_true) * torch.log(1 - Y_pred + 1e-9))
+#   #pred_loss = torch.mean((Y_pred - Y_true)**2)
+
+#   val,ind = Y_orig_pred.max(dim=-1)
+#   val_,ind_ = Y_pred.max(dim=-1)
+#   # assert False
+#   KL_loss = Y_orig_pred*(torch.log(Y_orig_pred+1e-15) - torch.log(Y_pred+1e-15))
+#   KL_loss = KL_loss.sum(dim=1)
+#   pred_loss = classifier_loss_fn(Y_orig_pred,Y).mean() + 0.1*KL_loss.mean(dim=0) #+ 5*(partial_Y_pred_t**2).mean()
+#   pred_loss.backward()
+	
+#   classifier_optimizer.step()
+
+#   return pred_loss
+
+
+
+def finetune_KL(X, U, Y, delta, classifier, classifier_optimizer,classifier_loss_fn,delta_lr=0.1,delta_clamp=0.15,delta_steps=10,lambda_GI=0.5,writer=None,step=None, task=None,**kwargs):
+
+
+	classifier_optimizer.zero_grad()
+	if len(U.size()) == 3:
+		U = U.squeeze(-1)
+	Y_orig_pred = classifier(X,U)
+
+
+	delta.requires_grad_(True)
+
+	# This block of code computes delta adversarially
+	d1 = delta.detach().cpu().numpy()
+	for ii in range(delta_steps):
+		delta = delta.clone().detach()
+		delta.requires_grad_(True)
+		U_grad = U.clone() - delta
+		U_grad.requires_grad_(True)
+		Y_pred = classifier(X, U_grad, logits=True)
+		if len(Y.shape)>1 and Y.shape[1] > 1:
+			Y_true = torch.argmax(Y, 1).view(-1,1).float()
+
+		partial_logit_pred_t = []
+		if len(Y_pred.shape)<2 or Y_pred.shape[1] < 2:
+			partial_Y_pred_t = torch.autograd.grad(Y_pred, U_grad, grad_outputs=torch.ones_like(Y_pred), retain_graph=True,create_graph=True)[0]
+		else:           
+			for idx in range(Y_pred.shape[1]):
+				logit = Y_pred[:,idx].view(-1,1)
+				partial_logit_pred_t.append(torch.autograd.grad(logit, U_grad, grad_outputs=torch.ones_like(logit), create_graph=True)[0])
+
+			
+			partial_Y_pred_t = torch.cat(partial_logit_pred_t, 1)
+
+
+		Y_pred = Y_pred + delta * partial_Y_pred_t
+
+		if task == 'classification':
+			Y_pred = torch.softmax(Y_pred,dim=-1)
+		# loss = -torch.mean(Y_true * torch.log(Y_pred + 1e-9))
+		if task == 'classification':
+			loss = -Y_orig_pred*(torch.log(Y_pred+1e-15))
+			loss = loss.sum(dim=1).mean(dim=0)
+		else:
+			mu,sig = Y_orig_pred[:,0].view(-1,1),torch.relu(Y_orig_pred[:,1].view(-1,1))
+			mu_,sig_ = Y_pred[:,0].view(-1,1),torch.relu(Y_pred[:,1].view(-1,1))
+
+			loss = torch.log(sig_+1e-15) - torch.log(sig+1e-15) + (sig + (mu-mu_)**2)/(sig_ + 1e-15)  # Note that sig_ is       # loss.backward()
+		partial_loss_delta = torch.autograd.grad(loss, delta, grad_outputs=torch.ones_like(loss), retain_graph=True)[0]
+		# print(partial_loss_delta,loss)
+		delta = delta + delta_lr*partial_loss_delta
+
+		if torch.norm(partial_loss_delta) < 1e-3 or delta > delta_clamp or delta < -1*delta_clamp:
+			break
+# 
+		# print(torch.cat([loss.view(-1,1),y_grad.view(-1,1),partial_loss_delta,partial_Y_pred_t.view(-1,1), p.view(-1,1),(torch.sqrt(loss)*y_grad.squeeze()).view(-1,1)],dim=1))
+		# with torch.no_grad():
+		#   print('{} {}'.format(ii, delta.cpu().clone().detach().numpy()))
+	delta = delta.clamp(-1*delta_clamp, delta_clamp).detach().clone()
+
+
+
+
+	U_grad = U.clone() - delta
+	U_grad.requires_grad_(True)
+	Y_pred = classifier(X, U_grad, logits=True)
+
+	partial_logit_pred_t = []
+
+	if len(Y_pred.shape)<2 or Y_pred.shape[1] < 2:
+		partial_Y_pred_t = torch.autograd.grad(Y_pred, U_grad, grad_outputs=torch.ones_like(Y_pred), create_graph=True)[0]
+	else:
+		for idx in range(Y_pred.shape[1]):
+			logit = Y_pred[:,idx].view(-1,1)
+			partial_logit_pred_t.append(torch.autograd.grad(logit, U_grad, grad_outputs=torch.ones_like(logit), create_graph=True)[0])
+		#print(partial_logit_pred_t)
+		partial_Y_pred_t = torch.cat(partial_logit_pred_t, 1)
+
+	# partial_Y_pred_t = torch.cat(partial_logit_pred_t, 1)
+	#print(partial_Y_pred_t.shape)
+	# partial_Y_pred_t = torch.autograd.grad(Y_pred, U_grad, grad_outputs=torch.ones_like(Y_pred), retain_graph=True)[0]
+	# print(Y_pred.size(),partial_Y_pred_t.size(),U.size())
+	Y_pred = Y_pred + delta * partial_Y_pred_t
+	if task == 'classification':
+		Y_pred = torch.softmax(Y_pred,dim=-1)
+	# Y_true = Y
+	#Y_true = torch.argmax(Y, 1).view(-1,1).float()
+
+	
+
+	if task == 'classification':
+		KL_loss = Y_orig_pred*(torch.log(Y_orig_pred+1e-15) - torch.log(Y_pred+1e-15))
+		KL_loss = KL_loss.sum(dim=1)
+	else:
+		mu,sig = Y_orig_pred[:,0].view(-1,1),torch.relu(Y_orig_pred[:,1].view(-1,1))
+		mu_,sig_ = Y_pred[:,0].view(-1,1),torch.relu(Y_pred[:,1].view(-1,1))
+
+		KL_loss = torch.log(sig_+1e-15) - torch.log(sig+1e-15) + (sig + (mu-mu_)**2)/(sig_ + 1e-15)  # Note that sig_ is actually variance and not std dev
+		# print(torch.cat([mu,mu_,sig,sig_,KL_loss],dim=1))
+		if torch.isnan(KL_loss.mean()):
+			print(torch.cat([mu,mu_,sig,sig_,KL_loss],dim=1))
+			assert False
+		# print(((mu-mu_)**2).mean(),(torch.log(sig_+1e-15) - torch.log(sig+1e-15)).mean())
+
+	pred_loss = classifier_loss_fn(Y_orig_pred,Y).mean() + 0.1*KL_loss.mean(dim=0) #+ 5*(partial_Y_pred_t**2).mean()
+	pred_loss.backward()
+	
+	classifier_optimizer.step()
+
+	return pred_loss
+
+
+
 # It is possible that the gains are due to "finetuning" and not due to the gradient regularization
 # Multi-step ideas
 # Saturate loss first then do grad-reg (finetune initially?)
@@ -534,7 +788,7 @@ class GradRegTrainer():
 		elif args.model == "tbaseline" or args.model == "goodfellow" or args.model == "inc_finetune":
 			from config_tbaseline import Config
 			config = Config(args)
-		elif args.model == "GI" or args.model == "t_inc_finetune" or args.model == "t_goodfellow" or args.model == "t_GI" or args.model == "grad_reg_curvature" or args.model == "grad_reg" or args.model == "fixed_GI" or args.model == "GI_t_delta" or args.model == "GI_v3" or args.model == "GI_num_int":
+		elif args.model == "GI" or args.model == "t_inc_finetune" or args.model == "t_goodfellow" or args.model == "t_GI" or args.model == "grad_reg_curvature" or args.model == "grad_reg" or args.model == "fixed_GI" or args.model == "GI_t_delta" or args.model == "GI_v3" or args.model == "GI_num_int_trap" or args.model == "GI_num_int_rk4" or args.model == "GIL" or args.model == "GI_KL_regularization" or args.model== "GI_KL":
 			from config_GI import Config
 			config = Config(args)
 
@@ -564,7 +818,11 @@ class GradRegTrainer():
 		data_index_file = config.data_index_file    #"../../data/HousePrice/indices.json"
 		self.classifier = config.classifier(**config.model_kwargs).to(args.device) 
 		self.lr = config.lr
+		self.schedule= False
 		self.classifier_optimizer = torch.optim.Adam(self.classifier.parameters(),config.lr)
+
+		if self.schedule:
+			self.scheduler = torch.optim.lr_scheduler.StepLR(self.classifier_optimizer, step_size=15, gamma=0.5)
 		# loss_type = 'bce' if self.dataset_kwargs['return_binary'] else 'reg'
 		
 		self.classifier_loss_fn = config.classifier_loss_fn   #reconstruction_loss
@@ -621,12 +879,19 @@ class GradRegTrainer():
 				for batch_X, batch_A, batch_U, batch_Y in (past_dataset):
 
 					# batch_X = torch.cat([batch_X,batch_U.view(-1,2)],dim=1)
-					l = train_classifier_batch(X=batch_X,dest_u=batch_U,dest_a=batch_U,Y=batch_Y,classifier=self.classifier,classifier_optimizer=self.classifier_optimizer,verbose=(class_step%20)==0,encoder=encoder, batch_size=self.BATCH_SIZE,loss_fn=self.classifier_loss_fn)
+					if self.model == "GI_KL_regularization":
+						delta = torch.FloatTensor(1,1).uniform_(-0.1,0.1).to(self.device) 
+						# k = int((epoch / self.FINETUNING_EPOCHS)*self.max_k)
+						l = finetune_KL(batch_X, batch_U, batch_Y, delta, self.classifier, self.classifier_optimizer,self.classifier_loss_fn,delta_lr=self.delta_lr,delta_clamp=self.delta_clamp,delta_steps=self.delta_steps,lambda_GI=self.lambda_GI)     
+					else:                       
+						l = train_classifier_batch(X=batch_X,dest_u=batch_U,dest_a=batch_U,Y=batch_Y,classifier=self.classifier,classifier_optimizer=self.classifier_optimizer,verbose=(class_step%20)==0,encoder=encoder, batch_size=self.BATCH_SIZE,loss_fn=self.classifier_loss_fn)
 					class_step += 1
 					class_loss += l
 					if self.writer is not None:
 						self.writer.add_scalar("loss/classifier",l.item(),class_step)
-				print("Epoch %d Loss %f"%(epoch,class_loss/len(past_data)),flush=False)
+				print("Epoch %d Loss %f"%(epoch,class_loss/(len(past_data)/(self.BATCH_SIZE))),flush=False)
+				if self.schedule:
+					self.scheduler.step()
 			# past_dataset = None
 		else:
 			class_step = 0
@@ -690,10 +955,14 @@ class GradRegTrainer():
 		Keyword Arguments:
 			num_domains {number} -- Number of domains on which to fine-tune (default: {2})
 		'''
+		Y_pred = []
+		Y_label = []
 		dom_indices = np.arange(len(self.source_domain_indices)).astype('int')[-1*num_domains:]
 		for i in dom_indices:
 			delta_ = torch.FloatTensor(1,1).uniform_(-0.1,0.1).to(self.device) #self.delta 
-			self.classifier_optimizer = torch.optim.Adam(self.classifier.parameters(),5e-4)
+			self.classifier_optimizer = torch.optim.Adam(self.classifier.parameters(),5e-4)  # Do we change this?
+			if self.schedule:
+				self.scheduler = torch.optim.lr_scheduler.StepLR(self.classifier_optimizer, step_size=15, gamma=0.5)
 			past_data = ClassificationDataSet(indices=self.source_data_indices[i],**self.dataset_kwargs)
 			past_dataset = torch.utils.data.DataLoader((past_data),self.BATCH_SIZE,True)
 			
@@ -712,6 +981,7 @@ class GradRegTrainer():
 			step = 0
 			for epoch in range(self.FINETUNING_EPOCHS):
 				
+
 
 				if self.model == "GI_t_delta":
 					print("Selecting delta for {} domain  {} epoch".format(i,epoch))
@@ -735,7 +1005,10 @@ class GradRegTrainer():
 						# delta_ = torch.FloatTensor(1,1).uniform_(-0.1,0.1).to(self.device) #self.delta 
 
 						self.delta = torch.tensor(delta_) #+ torch.rand(1).float().to(self.device)*0.001
-						l,delta_ = adversarial_finetune(batch_X, batch_U, batch_Y, self.delta, self.classifier, self.classifier_optimizer,self.classifier_loss_fn,delta_lr=self.delta_lr,delta_clamp=self.delta_clamp,delta_steps=self.delta_steps,lambda_GI=self.lambda_GI,writer=self.writer,step=step,string="delta_{}".format(i))
+						if torch.abs(self.delta) < 1e-4 or torch.abs(self.delta-self.delta_clamp) < 1e-4 or torch.abs(self.delta+self.delta_clamp) < 1e-4:
+							# This resets delta upon clamping or hitting 0
+							self.delta = torch.FloatTensor(1,1).uniform_(-0.1,0.1).to(self.device)
+						l,delta_ = adversarial_finetune(batch_X, batch_U, batch_Y, self.delta, self.classifier, self.classifier_optimizer,self.classifier_loss_fn,delta_lr=self.delta_lr,delta_clamp=self.delta_clamp,delta_steps=self.delta_steps,lambda_GI=self.lambda_GI,writer=self.writer,step=step,string="delta_{}".format(i), verbose=step%20 == 0)
 					elif self.model in ["grad_reg"]:
 						delta = (torch.rand(batch_U.size()).float()*(0.1-(-0.1)) - 0.1).to(batch_X.device)
 						# TODO pass delta hyperparams here
@@ -747,30 +1020,44 @@ class GradRegTrainer():
 						l = finetune_gradient_regularization_curvature(batch_X, batch_U, batch_Y, delta, self.classifier, self.classifier_optimizer,self.classifier_loss_fn,delta_lr=self.delta_lr,delta_clamp=self.delta_clamp,delta_steps=self.delta_steps,lambda_GI=self.lambda_GI,writer=self.writer,step=step,string="delta_{}".format(i))
 					elif self.model in ["fixed_GI"]:
 
-						delta = self.delta #(torch.rand(batch_U.size()).float()*(0.1-(-0.1)) - 0.1).to(batch_X.device)
+						delta = self.delta  #torch.FloatTensor(1,1).uniform_(-0.1,0.1).to(self.device)  
+						# delta = self.delta #(torch.rand(batch_U.size()).float()*(0.1-(-0.1)) - 0.1).to(batch_X.device)
 						# TODO pass delta hyperparams here
 						l = finetune(batch_X, batch_U, batch_Y, delta, self.classifier, self.classifier_optimizer,self.classifier_loss_fn,delta_lr=self.delta_lr,delta_clamp=self.delta_clamp,delta_steps=self.delta_steps,lambda_GI=self.lambda_GI,writer=self.writer,step=step,string="delta_{}".format(i))
+					elif self.model in ["GIL"]:
+
+						delta = torch.FloatTensor(1,1).uniform_(-0.1,0.1).to(self.device)  
+						# delta = self.delta #(torch.rand(batch_U.size()).float()*(0.1-(-0.1)) - 0.1).to(batch_X.device)
+						# TODO pass delta hyperparams here
+						l = finetune_GIL(batch_X, batch_U, batch_Y, delta, self.classifier, self.classifier_optimizer,self.classifier_loss_fn,delta_lr=self.delta_lr,delta_clamp=self.delta_clamp,delta_steps=self.delta_steps,lambda_GI=self.lambda_GI,writer=self.writer,step=step,string="delta_{}".format(i))   
+
 					elif self.model in ["GI_t_delta"]:
 
 						delta = self.delta[i] #(torch.rand(batch_U.size()).float()*(0.1-(-0.1)) - 0.1).to(batch_X.device)
 						# TODO pass delta hyperparams here
 						l = finetune(batch_X, batch_U, batch_Y, delta, self.classifier, self.classifier_optimizer,self.classifier_loss_fn,delta_lr=self.delta_lr,delta_clamp=self.delta_clamp,delta_steps=self.delta_steps,lambda_GI=self.lambda_GI,writer=self.writer,step=step,string="delta_{}".format(i))
-					elif self.model in ["GI_num_int"]:
+					elif self.model in ["GI_num_int_trap","GI_num_int_rk4"]:
 						delta = self.delta 
-						# k = int((epoch / self.FINETUNING_EPOCHS)*self.max_k) + 1  # This is curriculum learning, We may need a different function
-						k = int(self.max_k)
-						l = finetune_num_int(batch_X, batch_U, batch_Y, delta,k, self.classifier, self.classifier_optimizer,self.classifier_loss_fn,delta_lr=self.delta_lr,delta_clamp=self.delta_clamp,delta_steps=self.delta_steps,lambda_GI=self.lambda_GI,writer=self.writer,step=step,string="delta_{}".format(i))
+						k = int((epoch / self.FINETUNING_EPOCHS)*self.max_k) + 1  # This is curriculum learning, We may need a different function
+						# k = int(self.max_k)
+						l = stepwise_finetune(batch_X, batch_U, batch_Y, delta, self.classifier, self.classifier_optimizer,self.classifier_loss_fn, tot_steps=k,num_int=self.model.split("_")[-1])
 					
 					elif self.model in ["GI_v3"]:
 						delta = self.delta 
-						# k = int((epoch / self.FINETUNING_EPOCHS)*self.max_k)
+						k = int((epoch / self.FINETUNING_EPOCHS)*self.max_k)
 						l = additive_finetune(batch_X, batch_U, batch_Y, delta, self.classifier, self.classifier_optimizer,self.classifier_loss_fn,delta_lr=self.delta_lr,delta_clamp=self.delta_clamp,delta_steps=self.delta_steps,lambda_GI=self.lambda_GI,writer=self.writer,step=step,string="delta_{}".format(i))  
+					elif self.model in ["GI_KL"]:
+						delta = torch.FloatTensor(1,1).uniform_(-0.1,0.1).to(self.device) 
+						# k = int((epoch / self.FINETUNING_EPOCHS)*self.max_k)
+						l = finetune_KL(batch_X, batch_U, batch_Y, delta, self.classifier, self.classifier_optimizer,self.classifier_loss_fn,delta_lr=self.delta_lr,delta_clamp=self.delta_clamp,delta_steps=self.delta_steps,lambda_GI=self.lambda_GI,writer=self.writer,step=step,string="delta_{}".format(i),task=self.task)     
 					loss = loss + l
 					if self.writer is not None:
 						self.writer.add_scalar("loss/test_{}".format(i),l.item(),step)
 					step += 1
 
-				print("Epoch %d Loss %f"%(epoch,loss))
+				print("Epoch %d Loss %f"%(epoch,loss/(len(past_dataset))))
+				if self.schedule:
+					self.scheduler.step()
 			
 			# Validation -
 				if self.early_stopping:
@@ -795,7 +1082,7 @@ class GradRegTrainer():
 						break
 
 
-	def eval_classifier(self,log, ensemble=False):
+	def eval_classifier(self,log, ensemble=False, verbose=True):
 
 		if self.data == "house":
 			self.dataset_kwargs["drop_cols_classifier"] = None
@@ -825,6 +1112,9 @@ class GradRegTrainer():
 			elif self.task == 'regression':
 				Y_pred = Y_pred + [batch_Y_pred.reshape(-1,1)]
 				Y_label = Y_label + [batch_Y.detach().cpu().numpy().reshape(-1,1)]
+			elif self.task == 'gaussian_regression':
+				Y_pred = Y_pred + [batch_Y_pred[:,0].reshape(-1,1)]
+				Y_label = Y_label + [batch_Y.detach().cpu().numpy().reshape(-1,1)]  
 		if self.task == 'classification':
 			Y_pred = np.vstack(Y_pred)
 			Y_label = np.hstack(Y_label)
@@ -836,7 +1126,7 @@ class GradRegTrainer():
 			Y_pred = np.vstack(Y_pred)
 			Y_label = np.vstack(Y_label)
 			# print(np.hstack([Y_pred,Y_label]))
-			print(Y_pred.shape,Y_label.shape)
+			# print(np.hstack([Y_pred[:50],Y_label[:50]]),file=log)
 			print('MAE: ',np.mean(np.abs(Y_label-Y_pred),axis=0),file=log)
 			print('MSE: ',np.mean((Y_label-Y_pred)**2,axis=0),file=log)
 
@@ -883,9 +1173,16 @@ class GradRegTrainer():
 			self.classifier.load_state_dict(torch.load("classifier_{}_{}.pth".format(self.data,self.seed)))
 			print("Loading Model")
 		except Exception as e:
-			print(e)	
+			print(e)    
+			self.classifier.train()
 			self.train_classifier(encoder=self.encoder)  # Train classifier initially
 			torch.save(self.classifier.state_dict(), "classifier_{}_{}.pth".format(self.data,self.seed))
+
+
+		td = ClassificationDataSet(indices=self.source_data_indices[-1],**self.dataset_kwargs)
+		target_dataset = torch.utils.data.DataLoader(td,10,False,drop_last=False)
+		Y_pred = []
+		Y_label = []
 		# print("Loading")
 		#       
 		# vis_ind = np.array(self.cumulative_data_indices[-1])
@@ -897,12 +1194,17 @@ class GradRegTrainer():
 		print("Delta - {}".format(self.delta),file=self.log)
 		print("trelu - {} single_trelu - {}".format(self.trelu_limit,self.single_trelu),file=self.log)
 		print("Performance of the base classifier",file=self.log)
+		# print([x for x in self.classifier.named_parameters()])
+		# print("---------------------------")
 		self.eval_classifier(log=self.log)
 		self.classifier_optimizer = torch.optim.Adam(self.classifier.parameters(),self.lr)
-		if self.model in ["GI","t_GI","goodfellow","t_goodfellow","grad_reg","grad_reg_curvature", "fixed_GI", "GI_t_delta", "GI_v3", "GI_num_int"]:
+		if self.model in ["GI","t_GI","goodfellow","t_goodfellow","grad_reg","grad_reg_curvature", "fixed_GI", "GI_t_delta", "GI_v3", "GI_num_int_rk4","GI_num_int_trap", "GIL", "GI_KL"]:
+			self.classifier.train()
+			# print([x for x in self.classifier.named_parameters()])
 			self.finetune_grad_int(num_domains=self.num_finetune_domains)
 			print("Performance after fine-tuning",file=self.log)
 			self.eval_classifier(log=self.log,ensemble=self.ensemble)
+
 			# self.visualize_trajectory(vis_ind[:9],"plots/{}_{}_{}".format(self.seed,self.delta,self.goodfellow))
 		
 		# print("-----------------------------------------",file=log)
